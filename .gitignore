@@ -1,0 +1,21 @@
+# Rust
+/target/
+**/target/
+
+# Node
+node_modules/
+.pnpm-store/
+
+# cargo build → copy-wasm.mjs の出力先
+web/src/lib/wasm/
+
+# Worklet ビルド出力
+web/static/worklet/
+
+# SvelteKit
+web/.svelte-kit/
+web/build/
+
+# Editor
+.vscode/
+.idea/

@@ -1,0 +1,11 @@
+[package]
+name = "wasm-audio"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dsp-core = { path = "../dsp-core" }
+# profile.release はワークスペースルートで定義済み（02-architecture.md / Cargo.toml）
