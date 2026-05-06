@@ -85,6 +85,12 @@ impl Engine {
     pub fn voice_index_for_note(&self, midi_note: u8) -> Option<usize> {
         self.pool.voice_index_for_note(midi_note)
     }
+
+    /// テスト用: VoicePool 直接参照。release 中ボイスの damping_target 等の検証用。
+    #[doc(hidden)]
+    pub fn pool(&self) -> &VoicePool<POLYPHONY> {
+        &self.pool
+    }
 }
 
 impl Default for Engine {

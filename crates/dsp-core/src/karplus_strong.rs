@@ -139,6 +139,12 @@ impl KarplusStrong {
         self.energy
     }
 
+    /// テスト用: damping target を直接読む (release 中ボイスの誤復活検証 = High 2 修正の主検証)
+    #[doc(hidden)]
+    pub fn damping_target(&self) -> f32 {
+        self.damping.target()
+    }
+
     pub fn reset(&mut self) {
         for v in self.buffer.iter_mut() {
             *v = 0.0;

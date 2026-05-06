@@ -122,6 +122,12 @@ impl<const N: usize> VoicePool<N> {
     pub fn voice(&self, index: usize) -> Option<&KarplusStrong> {
         self.voices.get(index)
     }
+
+    /// テスト用: voice の length_int (alloc 不変検証用)。
+    #[doc(hidden)]
+    pub fn voice_length_int(&self, index: usize) -> Option<usize> {
+        self.voices.get(index).map(|v| v.length_int())
+    }
 }
 
 impl<const N: usize> Default for VoicePool<N> {
