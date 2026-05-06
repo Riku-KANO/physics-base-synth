@@ -37,7 +37,7 @@ impl LagrangeCoeffs {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn apply(&self, x_minus: f32, x_zero: f32, x_plus_1: f32, x_plus_2: f32) -> f32 {
         self.h0 * x_minus + self.h1 * x_zero + self.h2 * x_plus_1 + self.h3 * x_plus_2
     }

@@ -1,6 +1,6 @@
-//! Phase 2 Step 7: ピッチ精度ユニットテスト (F12 / F13)
+//! ピッチ精度ユニットテスト (F12 / F13)
 //!
-//! Phase 1 では整数ディレイのみで A1=55Hz が 2.3% 誤差。Phase 2 では Lagrange 3 次補間で
+//! Phase 1 は整数ディレイのみで A1=55Hz が 2.3% 誤差。Phase 2 は Lagrange 3 次補間で
 //! フィードバックループ内のディレイが分数化されている。本テストは Lagrange 補間の
 //! ピッチ精度を **独立に** 検証する。
 //!
@@ -17,16 +17,13 @@
 //! sub-sample 精度に絞る。C8 の周期 ~11.47 サンプルでも parabolic で 0.5% 以内の精度に
 //! 到達する。
 
+use dsp_core::engine::midi_to_freq;
 use dsp_core::karplus_strong::KarplusStrong;
 
 const SAMPLE_RATE: f32 = 48_000.0;
 const TOLERANCE: f32 = 0.005; // ± 0.5%
 const TEST_DAMPING: f32 = 0.9999;
 const TEST_BRIGHTNESS: f32 = 1.0;
-
-fn midi_to_freq(midi: u8) -> f32 {
-    440.0 * 2f32.powf((midi as f32 - 69.0) / 12.0)
-}
 
 /// note_on 直後 0.1 秒スキップ → autocorrelation で τ_peak を見つけ → parabolic
 /// interpolation で sub-sample 精度の τ_refined を求めて f0 を返す。
@@ -107,7 +104,7 @@ fn assert_pitch(midi: u8, expected_hz: f32) {
 
 #[test]
 fn test_pitch_a1() {
-    // Phase 1 で 2.3% 誤差だった A1 が Phase 2 で ± 0.5% に収まる (F13)
+    // F13: Phase 1 で 2.3% 誤差だった A1 が Lagrange 補間で ± 0.5% に収まる
     assert_pitch(33, 55.0);
 }
 

@@ -108,7 +108,7 @@ pub extern "C" fn synth_process_block(handle: *mut SynthHandle, frames: u32) {
         .process(&mut h.scratch_l[..n], &mut h.scratch_r[..n]);
 }
 
-/// Phase 2 (D17): mode = 0 → Poly, mode = 1 → Mono。不正値は黙って無視する。
+/// mode = 0 → Poly, mode = 1 → Mono (D17)。不正値は黙って無視する。
 #[unsafe(no_mangle)]
 pub extern "C" fn synth_set_polyphony_mode(handle: *mut SynthHandle, mode: u32) {
     if handle.is_null() {

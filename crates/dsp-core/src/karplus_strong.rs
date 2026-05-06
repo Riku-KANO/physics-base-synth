@@ -139,7 +139,7 @@ impl KarplusStrong {
         self.energy
     }
 
-    /// テスト用: damping target を直接読む (release 中ボイスの誤復活検証 = High 2 修正の主検証)
+    /// テスト用: damping target を直接読む (release 中ボイスが誤復活していないかの検証)
     #[doc(hidden)]
     pub fn damping_target(&self) -> f32 {
         self.damping.target()
@@ -159,22 +159,21 @@ impl KarplusStrong {
         self.age_samples = 0;
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn process_sample(&mut self) -> f32 {
         if !self.active {
             return 0.0;
         }
 
-        // Lagrange 4 点読み出し。剰余は length_int ではなく buffer.len() で取る (D27)
-        // ─ length_int で取ると read_p1 / read_p2 が「より新しい側」に巻き込まれて時系列順にならず、
-        //   x[n - D_int - 1] / x[n - D_int - 2] を取れない。
+        // Lagrange 4 点を時系列順に読む (D27)。剰余を length_int で取ると read_p1/p2 が
+        // リング上の「新しい側」に巻き込まれ、x[n - D_int - 1] / x[n - D_int - 2] を
+        // 取り出せなくなる。buf_len は power-of-two ではないので LLVM は `%` をマスク化
+        // できない — 1 回だけ `%` を使い、隣接位置は分岐デクリメントで導出する。
         let buf_len = self.buffer.len();
-        let d_int = self.length_int;
-        let base = self.write_index + buf_len; // 巻き戻しアンダーフロー回避
-        let read_m = (base - d_int + 1) % buf_len; // x[n - D_int + 1]、最新 (h0)
-        let read_z = (base - d_int) % buf_len; // x[n - D_int]、中央 (h1)
-        let read_p1 = (base - d_int - 1) % buf_len; // x[n - D_int - 1] (h2)
-        let read_p2 = (base - d_int - 2) % buf_len; // x[n - D_int - 2]、最古 (h3)
+        let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
+        let read_m = if read_z + 1 == buf_len { 0 } else { read_z + 1 };
+        let read_p1 = if read_z == 0 { buf_len - 1 } else { read_z - 1 };
+        let read_p2 = if read_p1 == 0 { buf_len - 1 } else { read_p1 - 1 };
 
         let read_value = self.lagrange.apply(
             self.buffer[read_m],
@@ -195,7 +194,8 @@ impl KarplusStrong {
         damped -= 1.0e-25;
 
         self.buffer[self.write_index] = damped;
-        self.write_index = (self.write_index + 1) % buf_len;
+        let next_write = self.write_index + 1;
+        self.write_index = if next_write == buf_len { 0 } else { next_write };
 
         self.energy = self.energy * ENERGY_DECAY + damped * damped * ENERGY_RISE;
         if self.energy < ENERGY_THRESHOLD {

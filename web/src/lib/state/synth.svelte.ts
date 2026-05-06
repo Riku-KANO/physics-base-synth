@@ -11,6 +11,9 @@ class SynthState {
 
 export const synth = new SynthState();
 
+// F18 / F20 の DevTools Console 検証用に mono/poly 切替を露出する。
+// `import.meta.env.DEV` は本番ビルドで定数 false に解決されブロック全体が tree-shake で
+// 除去されるため、本番バンドルに __synthDev は出ない。
 if (import.meta.env.DEV) {
 	type DevDiagnostics = {
 		setMode: (mode: 'poly' | 'mono') => void;

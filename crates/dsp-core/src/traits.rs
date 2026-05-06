@@ -10,7 +10,7 @@ pub trait Voice {
     fn process_sample(&mut self) -> f32;
     fn is_active(&self) -> bool;
 
-    /// Phase 2 (D19): voice stealing 判定用
+    /// voice stealing 判定用 (D19)
     fn note_id(&self) -> Option<u8>;
     fn age(&self) -> u32;
     fn amplitude(&self) -> f32;

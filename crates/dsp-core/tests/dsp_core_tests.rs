@@ -53,8 +53,8 @@ fn test_decay_with_low_damping() {
 fn test_length_matches_freq() {
     let mut v = fresh_voice();
     v.note_on(440.0, 0.8);
-    // Phase 2: length_int は floor(sr/freq), length_int + length_frac ≈ raw_len。
-    // 440Hz @ 48kHz は raw_len = 109.0909...、floor = 109。
+    // length_int は floor(sr/freq); length_int + length_frac ≈ raw_len。
+    // 440Hz @ 48kHz: raw_len = 109.0909..., floor = 109。
     let raw = SAMPLE_RATE / 440.0;
     let expected_int = raw.floor() as usize;
     assert_eq!(v.length_int(), expected_int);
@@ -73,10 +73,9 @@ fn test_no_allocation_in_process() {
 
 #[test]
 fn test_note_on_first_block_nonzero() {
-    // Phase 2 (Step 6 High 修正): note_on 直後 1 ブロックの出力絶対値最大が velocity * 1e-3 以上。
-    // 励振配置 buffer[0..length_int] + write_index = length_int の組み合わせが
-    // 機能していることを確認する（write_index = 0 + 励振配置だと初回 read 位置が
-    // ゼロ領域を指して励振サンプルがゼロ上書きされ無音になる罠への防壁）。
+    // 励振配置 buffer[0..length_int] + write_index = length_int の組み合わせの動作確認。
+    // write_index = 0 で励振配置すると初回 read 位置がゼロ領域を指し、励振サンプルが
+    // ゼロ上書きされて無音になる罠を踏んでいないかを 1 ブロック (128 サンプル) で検証。
     let mut v = fresh_voice();
     let velocity = 0.8_f32;
     v.note_on(440.0, velocity);
@@ -136,8 +135,8 @@ fn test_midi_to_freq_a4() {
 
 #[test]
 fn test_poly_mode_independent_voices() {
-    // Phase 2 ポリモード: 60 と 62 は別ボイスに割り当てられ、独立して鳴る。
-    // Phase 1 の単音 last-note-priority は Phase 2 で hold_stack 専用 (Step 13 以降の mono モード)。
+    // ポリモードでは 60 と 62 は別ボイスに割り当てられ独立して鳴る。
+    // last-note-priority は mono モードの hold_stack でのみ発動する。
     let mut e = fresh_engine();
     e.note_on(60, 0.8);
     e.note_on(62, 0.8);

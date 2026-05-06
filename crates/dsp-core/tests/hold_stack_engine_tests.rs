@@ -1,4 +1,4 @@
-//! Phase 2 Step 14: Engine の mono モード hold_stack 連携テスト (F18 / F19 / F20)
+//! Engine の mono モード hold_stack 連携テスト (F18 / F19 / F20)
 
 use dsp_core::engine::{Engine, SynthMode};
 use dsp_core::traits::AudioProcessor;

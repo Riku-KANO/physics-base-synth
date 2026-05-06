@@ -1,6 +1,6 @@
 use crate::karplus_strong::KarplusStrong;
-use crate::note_allocator::{select_voice_for_steal, StealResult};
-use crate::params::PARAM_DESCRIPTORS;
+use crate::note_allocator::select_voice_for_steal;
+use crate::params::ParamId;
 
 /// D12: N=8 固定。const generic で API は将来 N=4 / N=16 への切替を許容する形を維持
 pub const POLYPHONY: usize = 8;
@@ -33,24 +33,24 @@ impl<const N: usize> VoicePool<N> {
         }
     }
 
+    fn find_voice_index(&self, midi_note: u8) -> Option<usize> {
+        self.voices.iter().position(|v| v.note_id() == Some(midi_note))
+    }
+
     /// note_on を 4 段フォールバックでボイスに割り当てる (D13)。戻り値は割当先 index。
     /// 1. same-note-replace: 同じ midi_note を発音中のボイスがあれば再励振
     /// 2. 空きボイス検索: 非アクティブのうち最若番に割当
     /// 3. voice stealing: select_voice_for_steal で energy 閾値以下のうち最古
     pub fn note_on(&mut self, midi_note: u8, freq_hz: f32, velocity: f32) -> usize {
-        for (i, v) in self.voices.iter_mut().enumerate() {
-            if v.note_id() == Some(midi_note) {
-                v.note_on_with_id(midi_note, freq_hz, velocity);
-                return i;
-            }
+        if let Some(i) = self.find_voice_index(midi_note) {
+            self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
+            return i;
         }
-        for (i, v) in self.voices.iter_mut().enumerate() {
-            if !v.is_active() {
-                v.note_on_with_id(midi_note, freq_hz, velocity);
-                return i;
-            }
+        if let Some(i) = self.voices.iter().position(|v| !v.is_active()) {
+            self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
+            return i;
         }
-        let StealResult::Index(i) = select_voice_for_steal(&self.voices);
+        let i = select_voice_for_steal(&self.voices);
         debug_assert!(i < N);
         self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
         i
@@ -61,30 +61,27 @@ impl<const N: usize> VoicePool<N> {
     /// 再生を「復活」させてしまうため、新規 / 再励振したボイスにのみ適用する用途に分離。
     pub fn set_damping_voice(&mut self, index: usize, value: f32) {
         if let Some(v) = self.voices.get_mut(index) {
-            let clamped = PARAM_DESCRIPTORS[0].clamp(value);
-            v.set_damping(clamped);
+            v.set_damping(ParamId::Damping.descriptor().clamp(value));
         }
     }
 
     /// 該当 midi_note を発音中のボイスに note_off を発火 (poly モード用)。
     pub fn note_off(&mut self, midi_note: u8) {
-        for v in self.voices.iter_mut() {
-            if v.note_id() == Some(midi_note) {
-                v.note_off();
-            }
+        if let Some(i) = self.find_voice_index(midi_note) {
+            self.voices[i].note_off();
         }
     }
 
     /// 全ボイスへ damping を fan-out (Engine::set_param から呼ぶ)。
     pub fn set_damping(&mut self, value: f32) {
-        let clamped = PARAM_DESCRIPTORS[0].clamp(value);
+        let clamped = ParamId::Damping.descriptor().clamp(value);
         for v in self.voices.iter_mut() {
             v.set_damping(clamped);
         }
     }
 
     pub fn set_brightness(&mut self, value: f32) {
-        let clamped = PARAM_DESCRIPTORS[1].clamp(value);
+        let clamped = ParamId::Brightness.descriptor().clamp(value);
         for v in self.voices.iter_mut() {
             v.set_brightness(clamped);
         }
@@ -97,7 +94,7 @@ impl<const N: usize> VoicePool<N> {
     }
 
     /// 全ボイスを process_sample して累積し、1/sqrt(N) スケールで返す (D20)。
-    #[inline]
+    #[inline(always)]
     pub fn process_sample(&mut self) -> f32 {
         let mut sum = 0.0_f32;
         for v in self.voices.iter_mut() {
@@ -111,19 +108,16 @@ impl<const N: usize> VoicePool<N> {
         self.voices.iter().filter(|v| v.is_active()).count()
     }
 
-    /// テスト用: 該当 midi_note を発音中のボイスを探す。
     #[doc(hidden)]
     pub fn voice_index_for_note(&self, midi_note: u8) -> Option<usize> {
-        self.voices.iter().position(|v| v.note_id() == Some(midi_note))
+        self.find_voice_index(midi_note)
     }
 
-    /// テスト用: 指定 index のボイスを参照する。
     #[doc(hidden)]
     pub fn voice(&self, index: usize) -> Option<&KarplusStrong> {
         self.voices.get(index)
     }
 
-    /// テスト用: voice の length_int (alloc 不変検証用)。
     #[doc(hidden)]
     pub fn voice_length_int(&self, index: usize) -> Option<usize> {
         self.voices.get(index).map(|v| v.length_int())

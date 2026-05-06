@@ -17,12 +17,7 @@ use crate::traits::Voice;
 /// この値以下なら「ほぼ静か」とみなして優先的に犠牲にする
 pub const ENERGY_THRESHOLD_FOR_STEAL: f32 = 1.0e-3;
 
-#[derive(Debug, Clone, Copy)]
-pub enum StealResult {
-    Index(usize),
-}
-
-pub fn select_voice_for_steal<V: Voice, const N: usize>(voices: &[V; N]) -> StealResult {
+pub fn select_voice_for_steal<V: Voice, const N: usize>(voices: &[V; N]) -> usize {
     let mut best_quiet: Option<(usize, u32)> = None;
     for (i, v) in voices.iter().enumerate() {
         if v.amplitude() < ENERGY_THRESHOLD_FOR_STEAL {
@@ -33,7 +28,7 @@ pub fn select_voice_for_steal<V: Voice, const N: usize>(voices: &[V; N]) -> Stea
         }
     }
     if let Some((i, _)) = best_quiet {
-        return StealResult::Index(i);
+        return i;
     }
 
     let mut best_oldest = (0_usize, voices[0].age());
@@ -42,7 +37,7 @@ pub fn select_voice_for_steal<V: Voice, const N: usize>(voices: &[V; N]) -> Stea
             best_oldest = (i, v.age());
         }
     }
-    StealResult::Index(best_oldest.0)
+    best_oldest.0
 }
 
 #[cfg(test)]
@@ -94,8 +89,8 @@ mod tests {
             voice(1.0e-5, 50), // ほぼ無音
             voice(0.6, 300),
         ];
-        let StealResult::Index(i) = select_voice_for_steal(&voices);
-        assert_eq!(i, 2);
+        let i = select_voice_for_steal(&voices);
+        assert_eq!(i,2);
     }
 
     #[test]
@@ -107,8 +102,8 @@ mod tests {
             voice(0.5, 200),
             voice(0.5, 300),
         ];
-        let StealResult::Index(i) = select_voice_for_steal(&voices);
-        assert_eq!(i, 1);
+        let i = select_voice_for_steal(&voices);
+        assert_eq!(i,1);
     }
 
     #[test]
@@ -120,7 +115,7 @@ mod tests {
             voice(0.5, 200),
             voice(1.0e-6, 400),
         ];
-        let StealResult::Index(i) = select_voice_for_steal(&voices);
-        assert_eq!(i, 1);
+        let i = select_voice_for_steal(&voices);
+        assert_eq!(i,1);
     }
 }

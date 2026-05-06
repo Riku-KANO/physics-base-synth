@@ -1,10 +1,10 @@
 use crate::hold_stack::HoldStack;
-use crate::params::{ParamId, OUTPUT_GAIN_DEFAULT, PARAM_DESCRIPTORS};
+use crate::params::{ParamId, OUTPUT_GAIN_DEFAULT};
 use crate::smoothing::SmoothedValue;
 use crate::traits::AudioProcessor;
 use crate::voice_pool::{VoicePool, POLYPHONY};
 
-/// mono モード復帰時のデフォルト velocity (Step 13、Phase 3 で「note_off されたキーの velocity を保持」へ拡張候補)
+/// mono モード復帰時のデフォルト velocity。Phase 3 で「note_off されたキーの velocity を保持」へ拡張候補。
 const MONO_REVIVE_VELOCITY: f32 = 0.8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub struct Engine {
     pool: VoicePool<POLYPHONY>,
     output_gain: SmoothedValue,
     mode: SynthMode,
-    /// mono モード時の押下中ノート履歴 (D29、Phase 2 では mono 専用、poly では参照しない)
+    /// mono モード時の押下中ノート履歴 (D29)。poly モードでは参照しない。
     hold_stack: HoldStack,
     /// ユーザー設定の damping。note_off は damping target を 0.95 に上書きするので、
     /// 新規 / 再励振したボイスのみ復元するために保持する (set_damping_voice 用)。
@@ -33,8 +33,17 @@ impl Engine {
             output_gain: SmoothedValue::new(OUTPUT_GAIN_DEFAULT),
             mode: SynthMode::Poly,
             hold_stack: HoldStack::new(),
-            current_damping: PARAM_DESCRIPTORS[ParamId::Damping as usize].default,
+            current_damping: ParamId::Damping.descriptor().default,
         }
+    }
+
+    /// 新規ノートを発音し、割当先ボイスのみ damping をユーザー値に復元する。
+    /// `set_damping_voice` を fan-out にすると release 中ボイスを 0.95 → current_damping に
+    /// 巻き戻して再生を「復活」させてしまうため、必ず assigned index にだけ適用する。
+    fn trigger_voice(&mut self, midi_note: u8, velocity: f32) {
+        let freq = midi_to_freq(midi_note);
+        let assigned = self.pool.note_on(midi_note, freq, velocity);
+        self.pool.set_damping_voice(assigned, self.current_damping);
     }
 
     /// poly: VoicePool に直接発火。mono: 直前 top をリリースしてから push + 新規発音。
@@ -49,9 +58,7 @@ impl Engine {
             }
             self.hold_stack.push(midi_note);
         }
-        let freq = midi_to_freq(midi_note);
-        let assigned = self.pool.note_on(midi_note, freq, velocity);
-        self.pool.set_damping_voice(assigned, self.current_damping);
+        self.trigger_voice(midi_note, velocity);
     }
 
     /// poly: 該当ボイスを release (damping を 0.95 に加速)。
@@ -66,13 +73,10 @@ impl Engine {
                 self.hold_stack.remove(midi_note);
                 self.pool.note_off(midi_note);
                 let new_top = self.hold_stack.top();
-                // top が変わった場合のみ復帰発音 (中間キー解放では再 trigger しない、
-                // クリック対策)
+                // top が変わった場合のみ復帰発音 (中間キー解放では再 trigger しない、クリック対策)
                 if new_top != prev_top {
                     if let Some(top) = new_top {
-                        let freq = midi_to_freq(top);
-                        let assigned = self.pool.note_on(top, freq, MONO_REVIVE_VELOCITY);
-                        self.pool.set_damping_voice(assigned, self.current_damping);
+                        self.trigger_voice(top, MONO_REVIVE_VELOCITY);
                     }
                 }
             }
@@ -82,17 +86,17 @@ impl Engine {
     pub fn set_param(&mut self, id: u32, value: f32) {
         match ParamId::from_u32(id) {
             Some(ParamId::Damping) => {
-                let v = PARAM_DESCRIPTORS[ParamId::Damping as usize].clamp(value);
+                let v = ParamId::Damping.descriptor().clamp(value);
                 self.current_damping = v;
                 self.pool.set_damping(v);
             }
             Some(ParamId::Brightness) => {
-                let v = PARAM_DESCRIPTORS[ParamId::Brightness as usize].clamp(value);
-                self.pool.set_brightness(v);
+                self.pool
+                    .set_brightness(ParamId::Brightness.descriptor().clamp(value));
             }
             Some(ParamId::OutputGain) => {
-                let v = PARAM_DESCRIPTORS[ParamId::OutputGain as usize].clamp(value);
-                self.output_gain.set_target(v);
+                self.output_gain
+                    .set_target(ParamId::OutputGain.descriptor().clamp(value));
             }
             None => {}
         }
@@ -112,19 +116,18 @@ impl Engine {
         self.current_damping
     }
 
-    /// テスト・診断用: アクティブなボイス数 (D22 で C ABI 非公開)。
+    /// D22: C ABI 非公開。
     #[doc(hidden)]
     pub fn active_voice_count(&self) -> usize {
         self.pool.active_count()
     }
 
-    /// テスト用: 該当 midi_note のボイス index を取得。
     #[doc(hidden)]
     pub fn voice_index_for_note(&self, midi_note: u8) -> Option<usize> {
         self.pool.voice_index_for_note(midi_note)
     }
 
-    /// テスト用: VoicePool 直接参照。release 中ボイスの damping_target 等の検証用。
+    /// release 中ボイスの damping_target 等の検証用。
     #[doc(hidden)]
     pub fn pool(&self) -> &VoicePool<POLYPHONY> {
         &self.pool
@@ -141,10 +144,8 @@ impl AudioProcessor for Engine {
     fn prepare(&mut self, sample_rate: f32, max_block_size: usize) {
         self.sample_rate = sample_rate;
         self.pool.prepare(sample_rate, max_block_size);
-        self.output_gain.set_time_constant(
-            sample_rate,
-            PARAM_DESCRIPTORS[ParamId::OutputGain as usize].smoothing_tau,
-        );
+        self.output_gain
+            .set_time_constant(sample_rate, ParamId::OutputGain.descriptor().smoothing_tau);
         self.pool.set_damping(self.current_damping);
     }
 

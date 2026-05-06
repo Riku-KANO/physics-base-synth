@@ -1,13 +1,6 @@
-//! Phase 2 Step 11: VoicePool ユニットテスト (F10 / F11 / F17 / F24)
-//!
-//! - F10 (8 音同時発音): test_voice_pool_allocates_distinct_voices /
-//!   test_voice_pool_same_note_replace / test_voice_pool_note_on_returns_assigned_index /
-//!   test_engine_note_on_does_not_revive_released_voice
-//! - F11 (voice stealing): test_voice_pool_steals_quietest
-//! - F24 補助 (常用範囲のクリップ確認): test_voice_pool_polyphonic_mix_rms_bounded
-//! - F17 (ヒープ確保ゼロ): test_no_allocation_in_polyphonic_process
+//! VoicePool / voice stealing / no-alloc / RMS 統計境界 (F10 / F11 / F17 / F24)
 
-use dsp_core::engine::Engine;
+use dsp_core::engine::{midi_to_freq, Engine};
 use dsp_core::params::ParamId;
 use dsp_core::traits::AudioProcessor;
 use dsp_core::voice_pool::{VoicePool, POLYPHONY};
@@ -56,7 +49,7 @@ fn test_voice_pool_same_note_replace() {
 
 #[test]
 fn test_voice_pool_note_on_returns_assigned_index() {
-    // pool.note_on の戻り値が割当先ボイスの index と一致 (High 2 修正検証、F10)。
+    // pool.note_on の戻り値が割当先ボイスの index と一致 (F10)。
     let mut pool = fresh_pool();
     let i = pool.note_on(60, midi_to_freq(60), 0.8);
     assert!(i < POLYPHONY);
@@ -66,8 +59,8 @@ fn test_voice_pool_note_on_returns_assigned_index() {
 
 #[test]
 fn test_engine_note_on_does_not_revive_released_voice() {
-    // High 2 修正の主検証 (F10/F11): note_off で 0.95 になった release 中ボイスが、
-    // 別の note の note_on で current_damping に復元されてしまわないこと。
+    // F10/F11: note_off で 0.95 になった release 中ボイスが、別の note の note_on で
+    // current_damping に復元されてしまわないこと (set_damping_voice の存在意義)。
     let mut e = fresh_engine();
     e.set_param(ParamId::Damping as u32, 0.999);
     assert!((e.current_damping() - 0.999).abs() < 1e-6);
@@ -185,7 +178,3 @@ fn test_no_allocation_in_polyphonic_process() {
     }
 }
 
-#[inline]
-fn midi_to_freq(midi: u8) -> f32 {
-    440.0 * 2f32.powf((midi as f32 - 69.0) / 12.0)
-}
