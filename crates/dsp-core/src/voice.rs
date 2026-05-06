@@ -17,4 +17,17 @@ impl Voice for KarplusStrong {
     fn is_active(&self) -> bool {
         KarplusStrong::is_active(self)
     }
+
+    fn note_id(&self) -> Option<u8> {
+        KarplusStrong::note_id(self)
+    }
+
+    fn age(&self) -> u32 {
+        KarplusStrong::age_samples(self)
+    }
+
+    fn amplitude(&self) -> f32 {
+        // RMS-like 推定: energy は x² の指数移動平均なので sqrt が振幅近似
+        KarplusStrong::energy(self).sqrt()
+    }
 }

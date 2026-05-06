@@ -26,7 +26,7 @@ impl SmoothedValue {
         self.target = value;
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn next_sample(&mut self) -> f32 {
         self.current += self.coeff * (self.target - self.current);
         self.current

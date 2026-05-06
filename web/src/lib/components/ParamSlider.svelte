@@ -1,16 +1,17 @@
 <script lang="ts">
 	import { synth } from '$lib/state/synth.svelte';
+	import { getDescriptor, type ParamIdValue } from '$lib/audio/messages';
 
 	type Props = {
 		label: string;
-		paramId: number;
-		min: number;
-		max: number;
+		paramId: ParamIdValue;
 		step: number;
 		value: number;
 	};
 
-	let { label, paramId, min, max, step, value = $bindable() }: Props = $props();
+	let { label, paramId, step, value = $bindable() }: Props = $props();
+
+	const descriptor = $derived(getDescriptor(paramId));
 
 	function onInput(e: Event) {
 		const v = parseFloat((e.target as HTMLInputElement).value);
@@ -21,7 +22,7 @@
 
 <label class="param-slider">
 	<span class="label">{label}</span>
-	<input type="range" {min} {max} {step} {value} oninput={onInput} />
+	<input type="range" min={descriptor.min} max={descriptor.max} {step} {value} oninput={onInput} />
 	<span class="value">{value.toFixed(3)}</span>
 </label>
 

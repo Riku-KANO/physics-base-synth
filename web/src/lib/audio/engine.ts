@@ -135,6 +135,14 @@ export class SynthEngine {
 		}
 	}
 
+	/**
+	 * mono / poly 切替 (D17 / D21)。離散的なイベントなので rAF スロットルせず即時送信する。
+	 */
+	setMode(mode: 'poly' | 'mono'): void {
+		if (!this.ready) return;
+		this.post({ type: 'setMode', mode });
+	}
+
 	private flushParams(): void {
 		this.rafHandle = null;
 		for (const [id, value] of this.pendingParams) {

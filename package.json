@@ -2,12 +2,14 @@
   "name": "physics-base-synth",
   "private": true,
   "scripts": {
-    "build:wasm": "cargo build -p wasm-audio --target wasm32-unknown-unknown --release && node scripts/copy-wasm.mjs release && node scripts/check-wasm-exports.mjs",
-    "build:wasm:dev": "cargo build -p wasm-audio --target wasm32-unknown-unknown && node scripts/copy-wasm.mjs debug && node scripts/check-wasm-exports.mjs",
+    "gen:params": "node scripts/gen-params.mjs",
+    "check:params-sync": "node scripts/check-params-sync.mjs",
+    "build:wasm": "pnpm gen:params && cargo build -p wasm-audio --target wasm32-unknown-unknown --release && node scripts/copy-wasm.mjs release && node scripts/check-wasm-exports.mjs",
+    "build:wasm:dev": "pnpm gen:params && cargo build -p wasm-audio --target wasm32-unknown-unknown && node scripts/copy-wasm.mjs debug && node scripts/check-wasm-exports.mjs",
     "dev": "pnpm build:wasm:dev && pnpm --filter web dev",
     "build": "pnpm build:wasm && pnpm --filter web build",
     "preview": "pnpm --filter web preview",
-    "check": "cargo check --workspace && pnpm --filter web check",
+    "check": "cargo check --workspace && pnpm --filter web check && pnpm check:params-sync",
     "fmt": "cargo fmt --all && pnpm --filter web format",
     "lint": "cargo clippy --workspace --all-targets -- -D warnings"
   },

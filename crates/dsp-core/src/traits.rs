@@ -9,4 +9,9 @@ pub trait Voice {
     fn note_off(&mut self);
     fn process_sample(&mut self) -> f32;
     fn is_active(&self) -> bool;
+
+    /// voice stealing 判定用 (D19)
+    fn note_id(&self) -> Option<u8>;
+    fn age(&self) -> u32;
+    fn amplitude(&self) -> f32;
 }

@@ -17,6 +17,7 @@ const REQUIRED = [
   'synth_out_r_ptr',
   'synth_capacity',
   'synth_process_block',
+  'synth_set_polyphony_mode',
 ];
 
 const bytes = readFileSync(wasmPath);

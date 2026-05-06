@@ -3,7 +3,7 @@
 // `not_unsafe_ptr_arg_deref` は本クレートの C ABI 設計と相容れないため crate 全体で allow する。
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use dsp_core::engine::Engine;
+use dsp_core::engine::{Engine, SynthMode};
 use dsp_core::traits::AudioProcessor;
 
 #[repr(C)]
@@ -106,4 +106,19 @@ pub extern "C" fn synth_process_block(handle: *mut SynthHandle, frames: u32) {
     let n = (frames as usize).min(h.scratch_l.len());
     h.engine
         .process(&mut h.scratch_l[..n], &mut h.scratch_r[..n]);
+}
+
+/// mode = 0 → Poly, mode = 1 → Mono (D17)。不正値は黙って無視する。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_set_polyphony_mode(handle: *mut SynthHandle, mode: u32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    let synth_mode = match mode {
+        0 => SynthMode::Poly,
+        1 => SynthMode::Mono,
+        _ => return,
+    };
+    h.engine.set_mode(synth_mode);
 }

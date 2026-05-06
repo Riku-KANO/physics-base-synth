@@ -43,24 +43,18 @@
 		<ParamSlider
 			label="Damping"
 			paramId={PARAM_IDS.Damping}
-			min={0.9}
-			max={0.9999}
 			step={0.0001}
 			bind:value={synth.damping}
 		/>
 		<ParamSlider
 			label="Brightness"
 			paramId={PARAM_IDS.Brightness}
-			min={0}
-			max={1}
 			step={0.01}
 			bind:value={synth.brightness}
 		/>
 		<ParamSlider
 			label="Output Gain"
 			paramId={PARAM_IDS.OutputGain}
-			min={0}
-			max={1.5}
 			step={0.01}
 			bind:value={synth.outputGain}
 		/>
