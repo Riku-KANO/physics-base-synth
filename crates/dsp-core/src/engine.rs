@@ -37,9 +37,16 @@ impl Engine {
         }
     }
 
-    /// poly: VoicePool に直接発火。mono: hold_stack に push してから新規ノートに発火。
+    /// poly: VoicePool に直接発火。mono: 直前 top をリリースしてから push + 新規発音。
     pub fn note_on(&mut self, midi_note: u8, velocity: f32) {
         if matches!(self.mode, SynthMode::Mono) {
+            // 直前 top のボイスをリリース (mono は 1 音のみ鳴らす建前だが、
+            // 短い release tail はクリック対策で残す)
+            if let Some(prev) = self.hold_stack.top() {
+                if prev != midi_note {
+                    self.pool.note_off(prev);
+                }
+            }
             self.hold_stack.push(midi_note);
         }
         let freq = midi_to_freq(midi_note);
@@ -47,21 +54,26 @@ impl Engine {
         self.pool.set_damping_voice(assigned, self.current_damping);
     }
 
-    /// poly: 該当ボイスに note_off (damping を 0.95 に加速)。
-    /// mono: hold_stack から削除し、top があれば top のノートに発音復帰、空なら note_off。
+    /// poly: 該当ボイスを release (damping を 0.95 に加速)。
+    /// mono: hold_stack から削除し、現ボイスを release。新しい top があれば top に発音復帰。
     pub fn note_off(&mut self, midi_note: u8) {
         match self.mode {
             SynthMode::Poly => {
                 self.pool.note_off(midi_note);
             }
             SynthMode::Mono => {
+                let prev_top = self.hold_stack.top();
                 self.hold_stack.remove(midi_note);
-                if let Some(top) = self.hold_stack.top() {
-                    let freq = midi_to_freq(top);
-                    let assigned = self.pool.note_on(top, freq, MONO_REVIVE_VELOCITY);
-                    self.pool.set_damping_voice(assigned, self.current_damping);
-                } else {
-                    self.pool.note_off(midi_note);
+                self.pool.note_off(midi_note);
+                let new_top = self.hold_stack.top();
+                // top が変わった場合のみ復帰発音 (中間キー解放では再 trigger しない、
+                // クリック対策)
+                if new_top != prev_top {
+                    if let Some(top) = new_top {
+                        let freq = midi_to_freq(top);
+                        let assigned = self.pool.note_on(top, freq, MONO_REVIVE_VELOCITY);
+                        self.pool.set_damping_voice(assigned, self.current_damping);
+                    }
                 }
             }
         }
