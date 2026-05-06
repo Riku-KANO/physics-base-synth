@@ -25,6 +25,7 @@ interface WasmExports {
 	synth_out_r_ptr: (ptr: number) => number;
 	synth_capacity: (ptr: number) => number;
 	synth_process_block: (ptr: number, frames: number) => void;
+	synth_set_polyphony_mode: (ptr: number, mode: number) => void;
 }
 
 const FRAMES = 128;
@@ -60,6 +61,9 @@ class SynthProcessor extends AudioWorkletProcessor {
 				break;
 			case 'setParam':
 				this.exports?.synth_set_param(this.handlePtr, msg.id, msg.value);
+				break;
+			case 'setMode':
+				this.exports?.synth_set_polyphony_mode(this.handlePtr, msg.mode === 'mono' ? 1 : 0);
 				break;
 			case 'reset':
 				this.exports?.synth_reset(this.handlePtr);

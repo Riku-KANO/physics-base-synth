@@ -12,6 +12,7 @@ export type ToWorkletMessage =
 	| { type: 'noteOn'; midi: number; velocity: number }
 	| { type: 'noteOff'; midi: number }
 	| { type: 'setParam'; id: number; value: number }
+	| { type: 'setMode'; mode: 'poly' | 'mono' }
 	| { type: 'reset' }
 	| { type: 'dispose' };
 
