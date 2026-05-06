@@ -70,9 +70,9 @@ fn measure_f0(midi: u8, sample_rate: f32) -> f32 {
     let inner_hi = tau_max - lo;
     let mut best_idx = inner_lo;
     let mut best_val = r[inner_lo];
-    for idx in inner_lo..=inner_hi {
-        if r[idx] > best_val {
-            best_val = r[idx];
+    for (idx, &val) in r.iter().enumerate().take(inner_hi + 1).skip(inner_lo) {
+        if val > best_val {
+            best_val = val;
             best_idx = idx;
         }
     }
