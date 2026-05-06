@@ -135,6 +135,17 @@ export class SynthEngine {
 		}
 	}
 
+	/**
+	 * Phase 2 (D17 / D21): mono / poly モードを切替えて Worklet → wasm-audio に
+	 * `synth_set_polyphony_mode` を送る。Phase 2 では UI から呼ばないが、検証用 dev API
+	 * (window.__synthDev) と E2E テストから参照する内部 API として提供。離散的なモード
+	 * 切替なので rAF スロットルはせず即時送信する。
+	 */
+	setMode(mode: 'poly' | 'mono'): void {
+		if (!this.ready) return;
+		this.post({ type: 'setMode', mode });
+	}
+
 	private flushParams(): void {
 		this.rafHandle = null;
 		for (const [id, value] of this.pendingParams) {

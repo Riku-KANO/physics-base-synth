@@ -10,3 +10,12 @@ class SynthState {
 }
 
 export const synth = new SynthState();
+
+if (import.meta.env.DEV) {
+	type DevDiagnostics = {
+		setMode: (mode: 'poly' | 'mono') => void;
+	};
+	(globalThis as unknown as { __synthDev?: DevDiagnostics }).__synthDev = {
+		setMode: (mode) => synth.engine.setMode(mode)
+	};
+}
