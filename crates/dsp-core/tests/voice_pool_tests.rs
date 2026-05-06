@@ -154,9 +154,16 @@ fn test_voice_pool_polyphonic_mix_rms_bounded() {
 
 #[test]
 fn test_no_allocation_in_polyphonic_process() {
-    // F17: 8 ボイス全力で 1 秒分 process_sample 中、各ボイスの length_int (= バッファ
-    // 配置長の代理指標) が変化しないことを確認。Phase 1 test_no_allocation_in_process と
-    // 同じスタンス (Vec の再確保が起きていれば length_int が変わる)。
+    // F17 補助: process_sample 経路でヒープ確保が増えていないかを「length_int 不変」で
+    // 間接確認する smoke test。Vec を resize する経路 (例: note_on で誤って push) が
+    // 入ってしまうと length_int が変わる可能性があるため、回帰検出には有効。
+    //
+    // ただし alloc 数を直接 0 と保証するものではない。最終的なゼロアロック保証は
+    // (a) process_sample / VoicePool::process_sample に Vec::push / Vec::with_capacity /
+    //     Box::new が現れないことのコードレビュー、
+    // (b) Worklet 側 F17 検証 (synth_new 完了後 byteLength が変化しないことを確認、
+    //     06-build-and-verify.md §F17(a))
+    // で取る方針。Phase 3 で counting allocator か WASM memory size 自動計測を導入候補。
     let mut pool = fresh_pool();
     let notes: [u8; 8] = [60, 62, 64, 65, 67, 69, 71, 72];
     for &n in &notes {

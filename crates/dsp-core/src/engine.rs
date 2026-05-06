@@ -46,7 +46,7 @@ impl Engine {
         self.pool.set_damping_voice(assigned, self.current_damping);
     }
 
-    /// poly: VoicePool に直接発火。mono: 直前 top をリリースしてから push + 新規発音。
+    /// poly: VoicePool に直接発火。mono: 直前 top をリリースしてから stack を更新 + 新規発音。
     pub fn note_on(&mut self, midi_note: u8, velocity: f32) {
         if matches!(self.mode, SynthMode::Mono) {
             // 直前 top のボイスをリリース (mono は 1 音のみ鳴らす建前だが、
@@ -56,7 +56,9 @@ impl Engine {
                     self.pool.note_off(prev);
                 }
             }
-            self.hold_stack.push(midi_note);
+            // MIDI の重複 noteOn (同じノートを離さず 2 回押す) で stale な履歴が残らないよう
+            // push_unique で既存値を排除してから末尾に追加する
+            self.hold_stack.push_unique(midi_note);
         }
         self.trigger_voice(midi_note, velocity);
     }

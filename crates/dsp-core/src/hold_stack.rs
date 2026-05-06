@@ -36,6 +36,14 @@ impl<T: Copy + PartialEq, const N: usize> LinearStack<T, N> {
         }
     }
 
+    /// 既存の同値を 1 件除去してから末尾に追加する (LRU 風)。
+    /// MIDI の重複 noteOn では同じノートが 2 回以上来うるが、hold-stack 上では
+    /// 「最後に押された位置」だけを保持したいので、`push` ではなくこちらを使う。
+    pub fn push_unique(&mut self, value: T) {
+        self.remove(value);
+        self.push(value);
+    }
+
     pub fn remove(&mut self, value: T) {
         let mut found_at: Option<usize> = None;
         for i in 0..self.len {
@@ -130,6 +138,19 @@ mod tests {
         assert_eq!(s.top(), Some(65));
         s.remove(65);
         assert_eq!(s.top(), Some(64));
+    }
+
+    #[test]
+    fn test_hold_stack_push_unique_promotes_existing() {
+        // MIDI 重複 noteOn を模擬: C↓ D↓ C↓ で stack=[D, C] になる (旧 C が消えて末尾に再配置)。
+        let mut s: HoldStack = HoldStack::new();
+        s.push_unique(60);
+        s.push_unique(62);
+        s.push_unique(60);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.top(), Some(60));
+        s.remove(60);
+        assert_eq!(s.top(), Some(62));
     }
 
     #[test]

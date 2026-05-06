@@ -62,6 +62,27 @@ fn test_hold_stack_overflow_in_engine() {
 }
 
 #[test]
+fn test_mono_duplicate_note_on_does_not_leak_stale_entry() {
+    // MIDI の重複 noteOn で stale な C がスタックに残ると、D を離した時点で stale な C が
+    // top に残り「最後に押されたのは D だが C に戻る」という誤った復帰が起きる。
+    // C↓ D↓ C↓ D↑ で D を離すと現状の top は C (D 離して以降の有効な押下はなし) のはず。
+    let mut e = fresh_engine_mono();
+    e.note_on(C, 0.8);
+    e.note_on(D, 0.8);
+    e.note_on(C, 0.8);
+    // この時点で hold_stack = [D, C] (push_unique で旧 C が消えて末尾に再配置)
+    e.note_off(D);
+    // D は最近の top ではないので何も起きない: top は C のまま
+    assert!(
+        e.voice_index_for_note(C).is_some(),
+        "C should still sound after note_off(D)"
+    );
+    e.note_off(C);
+    assert!(e.voice_index_for_note(C).is_none(), "C released");
+    assert!(e.voice_index_for_note(D).is_none(), "D released");
+}
+
+#[test]
 fn test_synth_mode_switch_no_break() {
     // F20: Poly → Mono → Poly 切替時に hold_stack はクリアされるが、進行中の VoicePool
     // ボイスは消音されず process もクラッシュしない。

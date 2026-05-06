@@ -21,7 +21,7 @@ Phase 1 (MVP) で確立した「ブラウザで動作する Karplus–Strong 単
 
 - `VoicePool<const N: usize>` で N=8 同時発音できる
 - 9 音目押下時の voice stealing が「same-note-replace → 空きボイス最若番 → energy 閾値以下のうち最古 → 全 loud なら最古」の 4 段フォールバック（D13）で動作し、耳障りなクリックノイズを発生させない
-- A1 (55 Hz) から C8 (4186 Hz) まで全音域でピッチ誤差が ± 0.5% 以内（Phase 1 の整数ディレイで A1=55Hz の 2.3% 誤差を解消）
+- A1 (55 Hz) から C6 (1046 Hz) まで主要音域でピッチ誤差が ± 0.5% 以内（Phase 1 の整数ディレイで A1=55Hz の 2.3% 誤差を解消）。C7-C8 は FIR Lagrange 補間の magnitude が 1 を下回ることで loop gain が < 1 となり C8 fundamental が自己発振しない物理的制約があるため、R23 フォールバック (5) に従い `#[ignore]` 扱いとし Phase 3 で Thiran allpass / pitch tracker / FFT-based estimator の検討時に再評価する
 - `params.json` を単一ソースとし、Rust 側 `ParamId` enum / 範囲定数 と TS 側 `PARAM_IDS` / 範囲定義を **コード生成で同期**、CI で drift を検知
 - 内部的にモノ/ポリの両モードを持ち、モノモードでは hold note stack による last-note 復帰挙動を提供する（UI トグルは Phase 2 では出さない）
 - ポリフォニー 8 音時の AudioWorklet `process` 中ヒープ確保ゼロ（Phase 1 で達成した制約を維持）

@@ -29,13 +29,44 @@ function constName(name) {
 		.toUpperCase();
 }
 
-export function generateRustSource(paramsJson) {
-	const params = paramsJson.params;
+const NAME_RE = /^[A-Z][A-Za-z0-9]*$/;
+
+function validateParams(params) {
+	if (!Array.isArray(params)) {
+		throw new Error('params must be an array');
+	}
 	for (let i = 0; i < params.length; i++) {
-		if (params[i].id !== i) {
-			throw new Error(`params[${i}].id must equal ${i}, got ${params[i].id}`);
+		const p = params[i];
+		if (p.id !== i) {
+			throw new Error(`params[${i}].id must equal ${i}, got ${p.id}`);
+		}
+		if (typeof p.name !== 'string' || !NAME_RE.test(p.name)) {
+			throw new Error(
+				`params[${i}].name must match /^[A-Z][A-Za-z0-9]*$/ (used as Rust enum variant + JS object key), got ${JSON.stringify(p.name)}`
+			);
+		}
+		for (const k of ['min', 'max', 'default', 'smoothing_tau']) {
+			if (typeof p[k] !== 'number' || !Number.isFinite(p[k])) {
+				throw new Error(`params[${i}].${k} must be a finite number, got ${p[k]}`);
+			}
+		}
+		if (p.min > p.max) {
+			throw new Error(`params[${i}] (${p.name}): min (${p.min}) > max (${p.max})`);
+		}
+		if (p.default < p.min || p.default > p.max) {
+			throw new Error(
+				`params[${i}] (${p.name}): default (${p.default}) outside [min=${p.min}, max=${p.max}]`
+			);
+		}
+		if (p.smoothing_tau <= 0) {
+			throw new Error(`params[${i}] (${p.name}): smoothing_tau must be > 0, got ${p.smoothing_tau}`);
 		}
 	}
+}
+
+export function generateRustSource(paramsJson) {
+	const params = paramsJson.params;
+	validateParams(params);
 
 	const lines = [];
 	lines.push('// AUTO-GENERATED FROM params.json — DO NOT EDIT');
@@ -123,11 +154,7 @@ export function generateRustSource(paramsJson) {
 
 export function generateTsSource(paramsJson) {
 	const params = paramsJson.params;
-	for (let i = 0; i < params.length; i++) {
-		if (params[i].id !== i) {
-			throw new Error(`params[${i}].id must equal ${i}, got ${params[i].id}`);
-		}
-	}
+	validateParams(params);
 
 	const lines = [];
 	lines.push('// AUTO-GENERATED FROM params.json — DO NOT EDIT');

@@ -5,12 +5,12 @@ use crate::params::ParamId;
 /// D12: N=8 固定。const generic で API は将来 N=4 / N=16 への切替を許容する形を維持
 pub const POLYPHONY: usize = 8;
 
-/// 1/sqrt(N) スケール (D20)。POLYPHONY=8 用にコンパイル時定数で計算しておく。
-const POLY_SCALE: f32 = 0.353_553_4; // 1.0 / 8.0_f32.sqrt() ≈ 1/2.8284
-
 pub struct VoicePool<const N: usize> {
     voices: [KarplusStrong; N],
     sample_rate: f32,
+    /// 1/sqrt(N) スケール (D20)。N から `new()` で計算してホットパスでの除算を避ける。
+    /// `f32::sqrt` は const 関数ではないためコンパイル時計算は不可。
+    poly_scale: f32,
 }
 
 impl<const N: usize> VoicePool<N> {
@@ -23,6 +23,7 @@ impl<const N: usize> VoicePool<N> {
                 ks
             }),
             sample_rate: 44100.0,
+            poly_scale: 1.0 / (N as f32).sqrt(),
         }
     }
 
@@ -100,7 +101,7 @@ impl<const N: usize> VoicePool<N> {
         for v in self.voices.iter_mut() {
             sum += v.process_sample();
         }
-        sum * POLY_SCALE
+        sum * self.poly_scale
     }
 
     /// アクティブなボイス数 (テスト・診断用、C ABI 非公開、D22)。
@@ -127,5 +128,21 @@ impl<const N: usize> VoicePool<N> {
 impl<const N: usize> Default for VoicePool<N> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_poly_scale_matches_inverse_sqrt_n() {
+        // const generic を変えても 1/sqrt(N) が追従することを確認 (gain ハードコードのバグ防止)。
+        let p4: VoicePool<4> = VoicePool::new();
+        let p8: VoicePool<POLYPHONY> = VoicePool::new();
+        let p16: VoicePool<16> = VoicePool::new();
+        assert!((p4.poly_scale - 0.5).abs() < 1.0e-6);
+        assert!((p8.poly_scale - 1.0 / 8.0_f32.sqrt()).abs() < 1.0e-6);
+        assert!((p16.poly_scale - 0.25).abs() < 1.0e-6);
     }
 }
