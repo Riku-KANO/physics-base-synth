@@ -9,7 +9,7 @@
   - Firefox 126+ で Web MIDI 対応
   - iOS Safari は HTTPS 配信下でのみ動作（StartButton のユーザージェスチャ必須）
 - Rust stable 1.83+ (target: `wasm32-unknown-unknown`)
-- Node.js 20 LTS+
+- Node.js 24+ (GitHub Pages Workflow も Node 24 で実行)
 - pnpm 9+ (corepack 経由)
 
 ## セットアップ
