@@ -142,9 +142,16 @@ fn test_poly_mode_independent_voices() {
     e.note_on(62, 0.8);
     assert_eq!(e.active_voice_count(), 2);
 
-    let idx_60 = e.voice_index_for_note(60).expect("voice 60 should be active");
-    let idx_62 = e.voice_index_for_note(62).expect("voice 62 should be active");
-    assert_ne!(idx_60, idx_62, "different notes should be on different voices");
+    let idx_60 = e
+        .voice_index_for_note(60)
+        .expect("voice 60 should be active");
+    let idx_62 = e
+        .voice_index_for_note(62)
+        .expect("voice 62 should be active");
+    assert_ne!(
+        idx_60, idx_62,
+        "different notes should be on different voices"
+    );
 }
 
 #[test]

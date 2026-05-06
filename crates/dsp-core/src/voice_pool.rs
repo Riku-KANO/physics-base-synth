@@ -35,7 +35,9 @@ impl<const N: usize> VoicePool<N> {
     }
 
     fn find_voice_index(&self, midi_note: u8) -> Option<usize> {
-        self.voices.iter().position(|v| v.note_id() == Some(midi_note))
+        self.voices
+            .iter()
+            .position(|v| v.note_id() == Some(midi_note))
     }
 
     /// note_on を 4 段フォールバックでボイスに割り当てる (D13)。戻り値は割当先 index。

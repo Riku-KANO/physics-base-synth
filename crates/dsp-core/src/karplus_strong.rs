@@ -173,7 +173,11 @@ impl KarplusStrong {
         let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
         let read_m = if read_z + 1 == buf_len { 0 } else { read_z + 1 };
         let read_p1 = if read_z == 0 { buf_len - 1 } else { read_z - 1 };
-        let read_p2 = if read_p1 == 0 { buf_len - 1 } else { read_p1 - 1 };
+        let read_p2 = if read_p1 == 0 {
+            buf_len - 1
+        } else {
+            read_p1 - 1
+        };
 
         let read_value = self.lagrange.apply(
             self.buffer[read_m],

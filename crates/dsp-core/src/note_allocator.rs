@@ -90,7 +90,7 @@ mod tests {
             voice(0.6, 300),
         ];
         let i = select_voice_for_steal(&voices);
-        assert_eq!(i,2);
+        assert_eq!(i, 2);
     }
 
     #[test]
@@ -103,7 +103,7 @@ mod tests {
             voice(0.5, 300),
         ];
         let i = select_voice_for_steal(&voices);
-        assert_eq!(i,1);
+        assert_eq!(i, 1);
     }
 
     #[test]
@@ -116,6 +116,6 @@ mod tests {
             voice(1.0e-6, 400),
         ];
         let i = select_voice_for_steal(&voices);
-        assert_eq!(i,1);
+        assert_eq!(i, 1);
     }
 }
