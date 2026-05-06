@@ -1,18 +1,15 @@
-name: Deploy to GitHub Pages
+name: CI
 
 on:
-  push:
+  pull_request:
     branches: [main]
+  push:
+    branches-ignore: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -21,10 +18,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (stable + wasm32)
+      - name: Install Rust toolchain (stable + wasm32 + clippy + rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
 
       - name: Cache cargo registry and target
         uses: actions/cache@v4
@@ -38,7 +36,6 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Setup pnpm
-        # pnpm version は web/package.json の packageManager フィールドに従う
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
@@ -47,26 +44,23 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
       - name: Build WASM + SvelteKit static site
-        env:
-          BASE_PATH: /physics-base-synth
         run: pnpm build
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/build
+      - name: svelte-check
+        run: pnpm --filter ./web check
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Lint (prettier + eslint)
+        run: pnpm --filter ./web lint
