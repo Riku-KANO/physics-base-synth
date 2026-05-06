@@ -1,7 +1,11 @@
+use crate::hold_stack::HoldStack;
 use crate::params::{ParamId, OUTPUT_GAIN_DEFAULT, PARAM_DESCRIPTORS};
 use crate::smoothing::SmoothedValue;
 use crate::traits::AudioProcessor;
 use crate::voice_pool::{VoicePool, POLYPHONY};
+
+/// mono モード復帰時のデフォルト velocity (Step 13、Phase 3 で「note_off されたキーの velocity を保持」へ拡張候補)
+const MONO_REVIVE_VELOCITY: f32 = 0.8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthMode {
@@ -14,6 +18,8 @@ pub struct Engine {
     pool: VoicePool<POLYPHONY>,
     output_gain: SmoothedValue,
     mode: SynthMode,
+    /// mono モード時の押下中ノート履歴 (D29、Phase 2 では mono 専用、poly では参照しない)
+    hold_stack: HoldStack,
     /// ユーザー設定の damping。note_off は damping target を 0.95 に上書きするので、
     /// 新規 / 再励振したボイスのみ復元するために保持する (set_damping_voice 用)。
     current_damping: f32,
@@ -26,21 +32,39 @@ impl Engine {
             pool: VoicePool::new(),
             output_gain: SmoothedValue::new(OUTPUT_GAIN_DEFAULT),
             mode: SynthMode::Poly,
+            hold_stack: HoldStack::new(),
             current_damping: PARAM_DESCRIPTORS[ParamId::Damping as usize].default,
         }
     }
 
-    /// note_on を VoicePool に委譲し、割当先ボイスのみ damping を復元する。
-    /// hold stack の連携は Step 13 で完成、現状は poly / mono どちらも同じ経路。
+    /// poly: VoicePool に直接発火。mono: hold_stack に push してから新規ノートに発火。
     pub fn note_on(&mut self, midi_note: u8, velocity: f32) {
+        if matches!(self.mode, SynthMode::Mono) {
+            self.hold_stack.push(midi_note);
+        }
         let freq = midi_to_freq(midi_note);
         let assigned = self.pool.note_on(midi_note, freq, velocity);
         self.pool.set_damping_voice(assigned, self.current_damping);
     }
 
-    /// note_off を VoicePool に委譲する。Step 13 で mono モードでの hold stack 復帰を追加。
+    /// poly: 該当ボイスに note_off (damping を 0.95 に加速)。
+    /// mono: hold_stack から削除し、top があれば top のノートに発音復帰、空なら note_off。
     pub fn note_off(&mut self, midi_note: u8) {
-        self.pool.note_off(midi_note);
+        match self.mode {
+            SynthMode::Poly => {
+                self.pool.note_off(midi_note);
+            }
+            SynthMode::Mono => {
+                self.hold_stack.remove(midi_note);
+                if let Some(top) = self.hold_stack.top() {
+                    let freq = midi_to_freq(top);
+                    let assigned = self.pool.note_on(top, freq, MONO_REVIVE_VELOCITY);
+                    self.pool.set_damping_voice(assigned, self.current_damping);
+                } else {
+                    self.pool.note_off(midi_note);
+                }
+            }
+        }
     }
 
     pub fn set_param(&mut self, id: u32, value: f32) {
@@ -64,6 +88,8 @@ impl Engine {
 
     pub fn set_mode(&mut self, mode: SynthMode) {
         self.mode = mode;
+        // モード切替時は履歴を破棄する。進行中のボイスは VoicePool 側で自然減衰させる。
+        self.hold_stack.clear();
     }
 
     pub fn mode(&self) -> SynthMode {
@@ -125,6 +151,7 @@ impl AudioProcessor for Engine {
         self.pool.reset();
         self.pool.set_damping(self.current_damping);
         self.output_gain.set_immediate(OUTPUT_GAIN_DEFAULT);
+        self.hold_stack.clear();
     }
 }
 
