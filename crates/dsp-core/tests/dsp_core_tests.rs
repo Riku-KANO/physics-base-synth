@@ -135,17 +135,17 @@ fn test_midi_to_freq_a4() {
 }
 
 #[test]
-fn test_last_note_priority_simple() {
+fn test_poly_mode_independent_voices() {
+    // Phase 2 ポリモード: 60 と 62 は別ボイスに割り当てられ、独立して鳴る。
+    // Phase 1 の単音 last-note-priority は Phase 2 で hold_stack 専用 (Step 13 以降の mono モード)。
     let mut e = fresh_engine();
     e.note_on(60, 0.8);
     e.note_on(62, 0.8);
-    assert_eq!(e.current_note(), Some(62));
+    assert_eq!(e.active_voice_count(), 2);
 
-    e.note_off(60);
-    assert_eq!(e.current_note(), Some(62));
-
-    e.note_off(62);
-    assert_eq!(e.current_note(), None);
+    let idx_60 = e.voice_index_for_note(60).expect("voice 60 should be active");
+    let idx_62 = e.voice_index_for_note(62).expect("voice 62 should be active");
+    assert_ne!(idx_60, idx_62, "different notes should be on different voices");
 }
 
 #[test]
