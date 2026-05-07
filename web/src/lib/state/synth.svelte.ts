@@ -7,6 +7,8 @@ class SynthState {
 	damping = $state(PARAM_DESCRIPTORS[PARAM_IDS.Damping].default);
 	brightness = $state(PARAM_DESCRIPTORS[PARAM_IDS.Brightness].default);
 	outputGain = $state(PARAM_DESCRIPTORS[PARAM_IDS.OutputGain].default);
+	pickPosition = $state(PARAM_DESCRIPTORS[PARAM_IDS.PickPosition].default);
+	bodyWet = $state(PARAM_DESCRIPTORS[PARAM_IDS.BodyWet].default);
 }
 
 export const synth = new SynthState();

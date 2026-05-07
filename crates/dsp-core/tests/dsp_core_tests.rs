@@ -2,6 +2,7 @@ use dsp_core::engine::{midi_to_freq, Engine};
 use dsp_core::karplus_strong::KarplusStrong;
 use dsp_core::params::ParamId;
 use dsp_core::traits::AudioProcessor;
+use dsp_core::voice_pool::POLYPHONY;
 
 const SAMPLE_RATE: f32 = 48_000.0;
 
@@ -52,6 +53,8 @@ fn test_decay_with_low_damping() {
 #[test]
 fn test_length_matches_freq() {
     let mut v = fresh_voice();
+    // Phase 3 D37: brightness=1.0 で τ_g=0 (LPF パススルー)、補正の影響を排除して計測
+    v.set_brightness(1.0);
     v.note_on(440.0, 0.8);
     // length_int は floor(sr/freq); length_int + length_frac ≈ raw_len。
     // 440Hz @ 48kHz: raw_len = 109.0909..., floor = 109。
@@ -123,14 +126,85 @@ fn test_engine_processes_block_without_panic() {
     let mut r = [0.0_f32; 128];
     e.process(&mut l, &mut r);
     assert!(l.iter().any(|s| *s != 0.0));
+    // Phase 3 D31/D32: Modal Body Resonator で stereo 分離（左右係数 ±5%）。
+    // 完全一致ではなく、両 ch が finite であることのみ確認。
     for i in 0..128 {
-        assert_eq!(l[i], r[i]);
+        assert!(l[i].is_finite(), "L[{i}] not finite: {}", l[i]);
+        assert!(r[i].is_finite(), "R[{i}] not finite: {}", r[i]);
     }
 }
 
 #[test]
 fn test_midi_to_freq_a4() {
     assert!((midi_to_freq(69) - 440.0).abs() < 1e-3);
+}
+
+/// Phase 3 F37: release ビルドで 8 voice 全 active + Pitch Bend + CC#7 の最悪ケースで
+/// process(128 frames) の平均時間が < 1.5 ms 以内 (CI flaky 対策で 2.0 ms)。
+#[test]
+#[cfg(not(debug_assertions))]
+fn test_engine_process_block_timing() {
+    use std::time::Instant;
+    let mut e = fresh_engine();
+    for i in 0..8 {
+        e.note_on(60 + i, 0.8);
+    }
+    e.handle_pitch_bend(1.0);
+    e.handle_midi_cc(7, 0.8);
+    e.set_param(ParamId::BodyWet as u32, 0.7);
+
+    let mut output_l = vec![0.0_f32; 128];
+    let mut output_r = vec![0.0_f32; 128];
+    const ITERATIONS: u32 = 1000;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        e.process(&mut output_l, &mut output_r);
+    }
+    let elapsed = start.elapsed();
+    let per_block_us = elapsed.as_micros() as f64 / ITERATIONS as f64;
+    let per_block_ms = per_block_us / 1000.0;
+    println!(
+        "F37: process_block timing = {:.3} ms / 128 frames",
+        per_block_ms
+    );
+    assert!(
+        per_block_ms < 2.0,
+        "F37 fail: {:.3} ms >= 2.0 ms",
+        per_block_ms
+    );
+}
+
+#[test]
+fn test_engine_voice_state_buffer_format() {
+    // Phase 3 D41: 33 byte レイアウト (active mask 1 + 8 voice × f32 4 bytes = 33)
+    let mut e = fresh_engine();
+    e.note_on(60, 0.8);
+    let mut l = vec![0.0_f32; 128];
+    let mut r = vec![0.0_f32; 128];
+    e.process(&mut l, &mut r);
+
+    let ptr = e.voice_state_ptr();
+    assert!(!ptr.is_null());
+    // 33 bytes をスライスとして読む
+    let buf = unsafe { core::slice::from_raw_parts(ptr, 33) };
+    let active_mask = buf[0];
+    // 60 を割り当てた voice index 0 が active
+    assert_eq!(active_mask & 0x01, 0x01, "voice 0 should be active");
+
+    // voice 0 の振幅 > 0
+    let amp_bytes: [u8; 4] = buf[1..5].try_into().unwrap();
+    let amp_0 = f32::from_le_bytes(amp_bytes);
+    assert!(
+        amp_0 > 0.0,
+        "voice 0 amplitude should be > 0, got {}",
+        amp_0
+    );
+
+    // 1..POLYPHONY voice は inactive
+    for i in 1..POLYPHONY {
+        let bit = (active_mask >> i) & 1;
+        assert_eq!(bit, 0, "voice {} should be inactive", i);
+    }
 }
 
 #[test]

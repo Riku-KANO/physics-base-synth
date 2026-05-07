@@ -9,10 +9,14 @@ function formatF32(value) {
 	if (!Number.isFinite(value)) {
 		throw new Error(`non-finite f32 literal: ${value}`);
 	}
-	if (Number.isInteger(value)) {
-		return `${value}.0`;
+	// JS double で計算した値は f32 では過剰精度になる (e.g. 0.4 * 1.05 = 0.42000000000000004)。
+	// Math.fround で f32 に丸めてから 7 桁有効数字で再文字列化、Rust の clippy::excessive_precision を回避。
+	const f32 = Math.fround(value);
+	const trimmed = Number(f32.toPrecision(7));
+	if (Number.isInteger(trimmed)) {
+		return `${trimmed}.0`;
 	}
-	return String(value);
+	return String(trimmed);
 }
 
 function formatTsNumber(value) {
@@ -64,9 +68,49 @@ function validateParams(params) {
 	}
 }
 
+function validateBodyModes(modes) {
+	if (!Array.isArray(modes)) {
+		throw new Error('body_modes must be an array');
+	}
+	if (modes.length !== 8) {
+		throw new Error(`body_modes must have exactly 8 entries, got ${modes.length}`);
+	}
+	for (let i = 0; i < modes.length; i++) {
+		const m = modes[i];
+		for (const k of ['freq', 'q', 'gain']) {
+			if (typeof m[k] !== 'number' || !Number.isFinite(m[k]) || m[k] <= 0) {
+				throw new Error(`body_modes[${i}].${k} must be a positive finite number, got ${m[k]}`);
+			}
+		}
+	}
+}
+
+/**
+ * Phase 3 D32: 左右 ch で freq / q を ±spread% 揺らす純粋関数。
+ * 偶数 index は freq +spread / q -spread、奇数 index は freq -spread / q +spread で
+ * 反転させ、左右の chorus 的広がりを生成。gain は全モード一律 +spread%。
+ */
+export function applyStereoSpread(modes, spread) {
+	return modes.map((m, i) => ({
+		freq: m.freq * (i % 2 === 0 ? 1 + spread : 1 - spread),
+		q: m.q * (i % 2 === 0 ? 1 - spread : 1 + spread),
+		gain: m.gain * (1 + spread)
+	}));
+}
+
 export function generateRustSource(paramsJson) {
 	const params = paramsJson.params;
 	validateParams(params);
+	const bodyModes = paramsJson.body_modes ?? null;
+	const stereoSpread = paramsJson.stereo_spread;
+	if (bodyModes !== null) {
+		validateBodyModes(bodyModes);
+		if (typeof stereoSpread !== 'number' || !Number.isFinite(stereoSpread) || stereoSpread < 0) {
+			throw new Error(
+				`stereo_spread must be a non-negative finite number when body_modes is present, got ${stereoSpread}`
+			);
+		}
+	}
 
 	const lines = [];
 	lines.push('// AUTO-GENERATED FROM params.json — DO NOT EDIT');
@@ -75,7 +119,7 @@ export function generateRustSource(paramsJson) {
 	lines.push('#[derive(Debug, Clone, Copy)]');
 	lines.push('pub struct ParamDescriptor {');
 	lines.push('    pub id: u32,');
-	lines.push('    pub name: &\'static str,');
+	lines.push("    pub name: &'static str,");
 	lines.push('    pub min: f32,');
 	lines.push('    pub max: f32,');
 	lines.push('    pub default: f32,');
@@ -113,7 +157,7 @@ export function generateRustSource(paramsJson) {
 	lines.push('        }');
 	lines.push('    }');
 	lines.push('');
-	lines.push('    pub fn descriptor(&self) -> &\'static ParamDescriptor {');
+	lines.push("    pub fn descriptor(&self) -> &'static ParamDescriptor {");
 	lines.push('        &PARAM_DESCRIPTORS[*self as usize]');
 	lines.push('    }');
 	lines.push('}');
@@ -149,12 +193,53 @@ export function generateRustSource(paramsJson) {
 		lines.push('');
 	}
 
+	if (bodyModes !== null) {
+		const modesL = bodyModes;
+		const modesR = applyStereoSpread(bodyModes, stereoSpread);
+		lines.push('// Phase 3 D30 / D32: ModalBodyResonator の係数テーブル');
+		lines.push('#[derive(Debug, Clone, Copy)]');
+		lines.push('pub struct BodyMode {');
+		lines.push('    pub freq: f32,');
+		lines.push('    pub q: f32,');
+		lines.push('    pub gain: f32,');
+		lines.push('}');
+		lines.push('');
+		lines.push(`pub const STEREO_SPREAD: f32 = ${formatF32(stereoSpread)};`);
+		lines.push('');
+		lines.push(`pub const BODY_MODES_L: [BodyMode; ${modesL.length}] = [`);
+		for (const m of modesL) {
+			lines.push(
+				`    BodyMode { freq: ${formatF32(m.freq)}, q: ${formatF32(m.q)}, gain: ${formatF32(m.gain)} },`
+			);
+		}
+		lines.push('];');
+		lines.push('');
+		lines.push(`pub const BODY_MODES_R: [BodyMode; ${modesR.length}] = [`);
+		for (const m of modesR) {
+			lines.push(
+				`    BodyMode { freq: ${formatF32(m.freq)}, q: ${formatF32(m.q)}, gain: ${formatF32(m.gain)} },`
+			);
+		}
+		lines.push('];');
+		lines.push('');
+	}
+
 	return lines.join('\n');
 }
 
 export function generateTsSource(paramsJson) {
 	const params = paramsJson.params;
 	validateParams(params);
+	const bodyModes = paramsJson.body_modes ?? null;
+	const stereoSpread = paramsJson.stereo_spread;
+	if (bodyModes !== null) {
+		validateBodyModes(bodyModes);
+		if (typeof stereoSpread !== 'number' || !Number.isFinite(stereoSpread) || stereoSpread < 0) {
+			throw new Error(
+				`stereo_spread must be a non-negative finite number when body_modes is present, got ${stereoSpread}`
+			);
+		}
+	}
 
 	const lines = [];
 	lines.push('// AUTO-GENERATED FROM params.json — DO NOT EDIT');
@@ -198,6 +283,40 @@ export function generateTsSource(paramsJson) {
 	lines.push('\treturn value < d.min ? d.min : value > d.max ? d.max : value;');
 	lines.push('}');
 	lines.push('');
+
+	if (bodyModes !== null) {
+		const modesL = bodyModes;
+		const modesR = applyStereoSpread(bodyModes, stereoSpread);
+		lines.push('// Phase 3 D30 / D32: ModalBodyResonator の係数テーブル');
+		lines.push('export interface BodyMode {');
+		lines.push('\treadonly freq: number;');
+		lines.push('\treadonly q: number;');
+		lines.push('\treadonly gain: number;');
+		lines.push('}');
+		lines.push('');
+		lines.push(`export const STEREO_SPREAD = ${formatTsNumber(stereoSpread)};`);
+		lines.push('');
+		lines.push('export const BODY_MODES_L: readonly BodyMode[] = [');
+		for (let i = 0; i < modesL.length; i++) {
+			const m = modesL[i];
+			const sep = i < modesL.length - 1 ? ',' : '';
+			lines.push(
+				`\t{ freq: ${formatTsNumber(m.freq)}, q: ${formatTsNumber(m.q)}, gain: ${formatTsNumber(m.gain)} }${sep}`
+			);
+		}
+		lines.push('] as const;');
+		lines.push('');
+		lines.push('export const BODY_MODES_R: readonly BodyMode[] = [');
+		for (let i = 0; i < modesR.length; i++) {
+			const m = modesR[i];
+			const sep = i < modesR.length - 1 ? ',' : '';
+			lines.push(
+				`\t{ freq: ${formatTsNumber(m.freq)}, q: ${formatTsNumber(m.q)}, gain: ${formatTsNumber(m.gain)} }${sep}`
+			);
+		}
+		lines.push('] as const;');
+		lines.push('');
+	}
 
 	return lines.join('\n');
 }

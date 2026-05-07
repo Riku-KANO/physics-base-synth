@@ -1,6 +1,6 @@
 # physics-base-synth
 
-物理ベース・シンセサイザー（Karplus–Strong）の polyphony 対応版。Rust + WebAssembly + Svelte 5 (SvelteKit) で実装。
+物理ベース・シンセサイザー（Karplus–Strong）の Phase 3 (Body Resonator + Extended KS + MIDI CC + Voice Meter UI + Soft clip + Thiran allpass) 対応版。Rust + WebAssembly + Svelte 5 (SvelteKit) で実装。
 
 ## 動作環境
 
@@ -33,10 +33,10 @@ pnpm dev
 
 | コマンド | 内容 |
 |---|---|
-| `pnpm gen:params` | `params.json` から `crates/dsp-core/src/params.rs` と `web/src/lib/audio/generated/params.ts` を生成 |
-| `pnpm check:params-sync` | 生成物が `params.json` と同期しているか CI で検証 (drift で exit 1) |
-| `pnpm build:wasm:dev` | `gen:params` → dev 用 WASM ビルド → コピー → export 検証 |
-| `pnpm build:wasm` | release 用 WASM ビルド (同上の release 版) |
+| `pnpm gen:params` | `params.json` から Rust / TS の `params` モジュールを生成 |
+| `pnpm check:params-sync` | 生成物 drift を CI で検証 (drift で exit 1) |
+| `pnpm build:wasm:dev` | `gen:params` → dev WASM ビルド → コピー → export 検証 |
+| `pnpm build:wasm` | release WASM ビルド (同上の release 版) |
 | `pnpm dev` | WASM(dev) ビルド後、Vite dev server 起動 (5173) |
 | `pnpm build` | 本番ビルド（静的サイト → `web/build/`） |
 | `pnpm preview` | 本番プレビュー (http://localhost:4173) |
@@ -44,103 +44,118 @@ pnpm dev
 | `pnpm lint` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `pnpm fmt` | `cargo fmt` + prettier |
 
-## アーキテクチャ概要 (Phase 2)
+## アーキテクチャ概要 (Phase 3)
 
 ```
 Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
-                                            │ FFI (C ABI、wasm-bindgen 不使用)
-                                            ▼
-                                       wasm-audio (cdylib)
-                                            │
-                                            ▼
-                                       dsp-core (rlib)
-                                       Engine / VoicePool<8> / KarplusStrong (Lagrange 3 次補間)
-                                       FractionalDelay / NoteAllocator / HoldStack / SmoothedValue / XorShift32
-                                       ParamDescriptor (params.json から生成)
+   VoiceMeter / PolyphonyToggle             │ FFI (C ABI、wasm-bindgen 不使用)
+   PickPosition / BodyWet スライダー         ▼
+   WebMIDI CC handler (CC#7/#64/#123)   wasm-audio (cdylib)
+   Pitch Bend                                │ + synth_midi_cc / synth_pitch_bend
+                                             │ + synth_voice_state_ptr
+                                             ▼
+                                        dsp-core (rlib)
+                                        Engine / VoicePool<8> / KarplusStrong (Thiran allpass)
+                                        ModalBodyResonator (M=8 並列 bandpass、stereo)
+                                        LossFilter (one-zero) / SoftClip (区間関数型)
+                                        SustainState / Pitch Bend / Voice State buffer
+                                        FractionalDelay (Thiran) / NoteAllocator / HoldStack
+                                        SmoothedValue / XorShift32 / ParamDescriptor (生成)
 ```
 
 詳細は仕様書 (`docs/specs/`) を参照:
 - Phase 1 (MVP): `docs/specs/2026-05-06-001-mvp/`
-- Phase 2 (polyphony / fractional delay / ParamDescriptor / hold note stack): `docs/specs/2026-05-07-002-phase2/`
+- Phase 2 (polyphony / fractional delay / ParamDescriptor): `docs/specs/2026-05-07-002-phase2/`
+- Phase 3 (Body Resonator / Extended KS / MIDI CC / Voice Meter): `docs/specs/2026-05-07-003-phase3/`
+
+## Phase 3 で追加された機能
+
+- **Modal Body Resonator (D30/D31/D32)**: M=8 並列 bandpass biquad で楽器ボディ共鳴。stereo は左右係数 ±5%。
+- **Extended Karplus–Strong**:
+  - One-zero loss filter (D33): `(1+ρ·z⁻¹)/(1+ρ)`、`note_on` 時に周波数依存式で算出
+  - Pick position 励振 shaping (D34): `note_on` 内で `noise[n] − noise[n−K]` を in-place 適用
+- **Thiran allpass (D36 案 D 採用)**: `KarplusStrong` の補間を `LagrangeCoeffs` から `ThiranCoeffs` 単一型に解消。A4 で 0.0002% 級のピッチ精度（Lagrange 0.89% → Thiran 0.0002% = ~4000× 改善）。C8 は damping=0.9999 では loop gain<1 で物理的に自己発振せず、ignore 継続。
+- **Brightness 群遅延補正 (D37)**: Thiran 採用後も brightness LPF (1-b)/b 群遅延は残るため `note_on` 時に `adjusted_length = raw_len - τ_g` で補正。
+- **Soft clip (D43)**: 区間関数型 `|x| ≤ 0.95` で完全 linear、`|x| > 0.95` で rational mapping、`|x| → ∞` で ±1.0 に厳密漸近。
+- **MIDI CC (D38/D38b/D40)**:
+  - CC#7 Channel Volume: OutputGain と直交 (final = output_gain × channel_volume)
+  - CC#64 Sustain Pedal: Poly mode のみ defer、Mono は Phase 2 既存挙動継承
+  - CC#123 All Notes Off: 全 voice + hold_stack + sustain_state を reset
+  - Pitch Bend (±2 半音): SmoothedValue 5ms tau で滑らか遷移
+- **Voice State (D41)**: 33 byte 共有メモリ (active mask + 8 振幅 LE f32) を 1024 sample stride で UI に push、VoiceMeter で表示。
+- **mono / poly トグル (D42)**: ヘッダー直下の正式 UI（dev-only `__synthDev.setMode` も維持）。
 
 ## 自己検証手順
 
 ### Phase 1 (F1〜F9): 単音動作
 
-| ID | 手順 | 期待結果 |
-|---|---|---|
-| **F1** | `pnpm dev` → http://localhost:5173 → Start Audio → 「Play C4 (test)」をクリック | 弾けたような減衰音 |
-| **F2** | 画面鍵盤の任意の鍵をクリック | F1 と同じ音色で発音 |
-| **F3** | A〜L 行 + W〜O 行を押す | C4〜D5 の半音階 |
-| **F4** | USB MIDI キーボードを接続 → MidiSelect で選択 → 鍵盤押下 | note_on/off で発音 |
-| **F5** | Damping を 0.99 → 0.999 へドラッグ | 音の減衰時間が伸びる |
-| **F6** | Brightness を 0.1 → 0.9 へドラッグ | 高域含有量が変化（明るくなる） |
-| **F7** | スライダーを左右に高速ドラッグ | プチノイズが聞こえない |
-| **F8** | DevTools Performance で記録しながら A キーを 100 連打。または `synth-processor.ts` の `process` に `memory.buffer.byteLength` の不変チェックを一時的に挿入 | WASM memory が grow しない |
-| **F9** | iPhone Safari (HTTPS) でアクセス | Start Audio タップで発音 |
+[Phase 1 README](docs/specs/2026-05-06-001-mvp/06-build-and-verify.md#検証項目f1f9) を参照。実機検証は持ち越し継続。
 
-### Phase 2 (F10〜F25): polyphony / pitch / hold stack / size
+### Phase 2 (F10〜F25): polyphony / pitch / size
+
+[Phase 2 06 章](docs/specs/2026-05-07-002-phase2/06-build-and-verify.md) を参照。実機検証は持ち越し継続。
+
+### Phase 3 (F26〜F38b): Body / Extended KS / MIDI CC / Voice Meter / サイズ
 
 | ID | 手順 | 期待結果 |
 |---|---|---|
-| **F10** | PC キーボードで A, S, D, F, G, H, J, K の 8 鍵を同時押下 | 8 音が重畳して聞こえ、クリップ歪みなし |
-| **F11** | F10 の状態から 9 音目 (KeyL) を押下 | voice stealing で energy 閾値以下のうち最古ボイスが置換、耳障りなクリックなし |
-| **F12** | `cargo test -p dsp-core --test pitch_accuracy --release` (test_pitch_a4 / c6 含む) | A1〜C6 のピッチが ± 0.5% 以内 (test_pitch_c8 は KS-Lagrange 限界で `#[ignore]`、Phase 3 課題) |
-| **F13** | F12 の `test_pitch_a1` (Phase 1 課題解消) | 55Hz が ± 0.5% 以内 |
-| **F14** | `pnpm check:params-sync` | `ParamDescriptor sync OK.` |
-| **F15** | `params.json` を編集後 `pnpm gen:params` を実行せず `pnpm check:params-sync` | exit 1、`params.rs is out of sync` 表示 |
-| **F16** | DevTools Performance で 8 音同時発音中の `process()` 1 回の所要時間を計測 | 平均 < 1.5ms (CPU 予算 2.67ms 内) |
-| **F17** | `synth-processor.ts` 末尾に `synth_new` 直後の `byteLength` baseline 比較を一時挿入し、8 音同時 + 連打を 30 秒継続 | `[F17] WASM memory grew` 警告が一度も出ない (確認後コード削除) |
-| **F18** | dev ビルドで DevTools Console から `__synthDev.setMode('mono')` → C 押→D 押→D 離→C 復帰→C 離→無音 | D 離した時点で C に復帰して鳴る |
-| **F19** | mono モードで 17 鍵を順次押下 | 最古ノートはスタックから消えるが、押下中のキーは全部残る (cargo test で検証済) |
-| **F20** | `__synthDev.setMode('mono'/'poly')` を 10 回連続で切替 | クラッシュなし、無音化なし、切替時クリックなし |
-| **F21** | `pnpm build` 後、`web/build/_app/immutable/assets/wasm_audio.*.wasm` を gzip 圧縮 | gzip < 30 KB (実測 10.58 KB) |
-| **F22** | `pnpm build` 後、`web/build/worklet/synth-processor.js` のバイトサイズ | < 10 KB (実測 5.04 KB) |
-| **F23** | poly モードで 9 鍵以降を高速連打 (1 秒に 5 回) を 10 秒継続 | 知覚できる耳障りなクリックなし |
-| **F24 (a)** | OutputGain ≤ 1.0 + 通常演奏で 30 秒継続 | ハードクリップ歪みが知覚されない (1/sqrt(N) スケール効果) |
-| **F24 (b)** | OutputGain=1.5 + 8 鍵全力強打 | 最悪ケースで歪みが出る場合あり (Phase 3 で limiter 検討) |
-| **F25** | `docs/retrospective/2026-05-06-001-mvp.md` §2 で Phase 1 F1〜F9 が達成済みと記載 | F1〜F9 すべて達成済み記載 |
+| **F26** | `cargo test -p dsp-core test_modal_body_` / `test_single_biquad_` | 単体: DC<0.001、ピーク `mode.gain` ± 5%、aggregate: ピーク 0.5〜1.5 倍 |
+| **F27** | `cargo test -p dsp-core test_loss_filter_` | DC ゲイン 1.0、Nyquist 減衰 (1-ρ)/(1+ρ)、A2<A4 で ρ 増 |
+| **F28** | `cargo test -p dsp-core test_pick_position_` | β=0.5 で K=L/2 lag に強い anti-correlation、buffer.len() 不変 |
+| **F29** | (Step 1 試作評価) Thiran 採用判定 | 案 D 採用済み (D36)、A1〜C6 で 0.02% 級、C8 のみ ignore 継続 |
+| **F30** | `cargo test -p dsp-core test_engine_brightness_pitch_correction` | brightness=0.5 で A4 誤差 < 0.5% |
+| **F31** | `cargo test -p dsp-core test_engine_midi_cc_` | CC#7 直交 / CC#64 defer / CC#123 reset、Mono+Sustain は no-op |
+| **F32** | `cargo test -p dsp-core test_pitch_bend_` | ±2 clamp、ring buffer 不変、bend→0 で base_length 復帰 |
+| **F33** | `cargo test -p dsp-core test_sustain_` | active/pending bitmap、retrigger で clear、reset で active=false |
+| **F34** | 実機: `pnpm dev` → 8 鍵同時押下 | VoiceMeter 8 セルすべて active 表示、振幅で輝度変化 |
+| **F35** | `cargo test -p dsp-core test_soft_clip_` | `\|x\|≤0.95` で完全 linear、`\|x\|→∞` で `\|y\|<1.0` 漸近 |
+| **F36** | `pnpm build` 後 `gzip -c web/build/_app/immutable/assets/wasm_audio.*.wasm \| wc -c` | gzip < 30 KB (実測 28 KB) |
+| **F37** | `cargo test --release -p dsp-core test_engine_process_block_timing -- --nocapture` | 平均 < 1.5 ms (実測 0.012 ms) |
+| **F38** | `cargo test -p dsp-core test_no_allocation_with_modal_body_and_midi_cc` | 8 voice 全 active + CC + Pitch Bend で buffer.len() 不変 |
+| **F38b** | (Phase 3 完成判定) `pnpm preview` → Chrome DevTools Performance タブで Worklet `process` Self time avg/max を計測 | avg < 1.5 ms / max < 2.5 ms。実機操作のため手動検証 |
 
 ### dsp-core ユニットテスト一覧
 
-`cargo test -p dsp-core` で 38 件パス + 1 件 ignored:
+`cargo test -p dsp-core` で **94 件パス + 1 件 ignored**:
 
-- Phase 1 既存 (12 件): silence_when_inactive / energy_rises_after_note_on / decay_with_low_damping / length_matches_freq / no_allocation_in_process / paramid_roundtrip / damping_preserved_across_note_on / engine_processes_block_without_panic / midi_to_freq_a4 / poly_mode_independent_voices / setparam_clamps_out_of_range / note_on_first_block_nonzero
-- fractional_delay (4 件): d_zero / d_one / coeffs_sum_to_one / clamps_out_of_range
-- note_allocator (3 件): picks_quietest / falls_back_to_oldest / among_quiet_picks_oldest
-- hold_stack (4 件): push_pop_basic / overflow_drops_oldest / remove_middle / clear
-- voice_pool_tests (7 件): allocates_distinct_voices / same_note_replace / note_on_returns_assigned_index / engine_does_not_revive_released_voice / steals_quietest / polyphonic_mix_rms_bounded / no_allocation_in_polyphonic_process
-- hold_stack_engine_tests (3 件): last_note_priority / overflow_in_engine / mode_switch_no_break
-- pitch_accuracy (5 PASS, 1 IGNORED): a1 / a2 / a4 / c6 (PASS) / long_term_stability_high_damping (PASS) / c8 (`#[ignore]`、KS-Lagrange 限界、R23 フォールバック)
+- Phase 1 既存 + Phase 2 拡張 (40 件): silence_when_inactive / energy_rises_after_note_on / decay_with_low_damping / length_matches_freq / no_allocation_in_process / paramid_roundtrip / damping_preserved_across_note_on / engine_processes_block_without_panic / midi_to_freq_a4 / poly_mode_independent_voices / setparam_clamps_out_of_range / note_on_first_block_nonzero / hold_stack 系 / voice_pool 系 / note_allocator 系
+- fractional_delay (10 件): Lagrange 4 件 + set_fractional + Thiran 関連 6 件
+- modal_body_biquad / modal_body (9 件): 単体 / aggregate
+- loss_filter (4 件)
+- karplus_strong_pick (5 件)
+- soft_clip (6 件)
+- pitch_bend (4 件)
+- sustain (6 件)
+- midi_cc (9 件)
+- pitch_accuracy (5 PASS, 1 IGNORED): A1/A2/A4/C6 + long_term_stability + (`#[ignore]` C8、damping<1 で物理限界)
 
 ## クレート構成
 
 | クレート | 種類 | 役割 |
 |---|---|---|
-| `crates/dsp-core` | rlib（純粋 Rust、std 依存最小、Phase 2 でも `heapless` 等の外部 crate なし） | Engine / VoicePool / KarplusStrong (Lagrange 3 次補間) / NoteAllocator / HoldStack / SmoothedValue / XorShift32 / ParamDescriptor (生成) |
-| `crates/wasm-audio` | cdylib（C ABI、wasm-bindgen 不使用） | `synth_*` 関数群を `#[unsafe(no_mangle)] extern "C"` で公開。Phase 1 の 10 関数 + Phase 2 の `synth_set_polyphony_mode` |
-| `web` | SvelteKit + adapter-static | UI / AudioWorklet / Web MIDI |
+| `crates/dsp-core` | rlib（純粋 Rust、依存ゼロ） | Engine / VoicePool / KarplusStrong (Thiran 単一型) / ModalBodyResonator / LossFilter / SoftClip / SustainState / NoteAllocator / HoldStack / SmoothedValue / XorShift32 / ParamDescriptor (生成) |
+| `crates/wasm-audio` | cdylib（C ABI、wasm-bindgen 不使用） | `synth_*` 15 関数を `#[unsafe(no_mangle)] extern "C"` で公開（Phase 2 の 12 関数 + Phase 3 の midi_cc / pitch_bend / voice_state_ptr） |
+| `web` | SvelteKit + adapter-static | UI / AudioWorklet / Web MIDI / VoiceMeter / PolyphonyToggle |
 
-## ParamDescriptor 単一ソース
+## Phase 3 で解消された Phase 2 の課題
 
-`params.json` (リポジトリルート) を編集して `pnpm gen:params` を実行すると、Rust 側 (`crates/dsp-core/src/params.rs`) と TS 側 (`web/src/lib/audio/generated/params.ts`) が同時に更新される。`pnpm build:wasm` / `pnpm dev` のチェーンで自動再生成、`pnpm check:params-sync` が CI 上で drift を検知する。
+- ✅ **音色のリアリティ**: Modal Body Resonator (M=8 ボディ共鳴) + Extended KS で「弦音だけでは安っぽい」から脱却
+- ✅ **A4 ピッチ精度 0.89% → 0.0002%**: Thiran allpass (案 D) で約 4000× 改善
+- ✅ **MIDI 表現力**: Pitch Bend / Channel Volume / Sustain Pedal 対応
+- ✅ **mono/poly トグル UI 正式化** (Phase 2 では dev-only)
+- ✅ **Voice Meter UI** (Phase 2 では internal API のみ)
 
-## Phase 2 で解消された Phase 1 の妥協
+## Phase 4 への申し送り
 
-- ✅ **fractional delay** (Lagrange 3 次補間) で A1=55Hz の ピッチ誤差 (Phase 1 で約 2.3%) を ± 0.5% 以内に解消
-- ✅ **8 音 polyphony** (`VoicePool<8>`) + voice stealing (energy 閾値以下のうち最古、4 段フォールバック)
-- ✅ **mono モード** で hold note stack による last-note priority 復帰挙動 (UI トグルは Phase 3、内部 API は提供)
-- ✅ **ParamDescriptor + コード生成**: `ParamId` (Rust) / `PARAM_IDS` (TS) の二重管理を解消
-
-## Phase 3 への申し送り
-
-- Body Resonator (弦音だけでは「安っぽい音」から抜けないため、IR convolution / modal filter / static IR の選択)
-- Extended Karplus–Strong (loss filter / pick position / stretching all-pass)
-- MIDI CC マッピング (pitch bend / mod wheel / sustain pedal)
-- プリセット保存・ロード (localStorage / IndexedDB)
-- WASM SIMD (target-feature=+simd128)
-- UI で active voice 数表示、mono/poly トグル
-- C8 ピッチ精度: KS-Lagrange の本質的限界。pitch tracker / FFT-based estimator / soft clip / look-ahead limiter で再評価
+- C8 ピッチ自己発振: damping=1.0 自己発振モード or FFT-based estimator で再評価
+- Mod Wheel (CC#1) + LFO の仕様確定 (rate / 波形 / 配分 / 深さ)
+- プリセット保存・ロード (Modal 係数 + 全パラメータの localStorage / IndexedDB)
+- 多楽器プリセット (クラシックギター / ウクレレ / マンドリン / ベース)
+- Stretching all-pass + impact model でピアノ音色
+- Pick position の fractional 化 + 連続変更
+- Look-ahead limiter (5 ms 遅延型、soft clip より透明)
+- WASM SIMD (`target-feature=+simd128`)
+- F38b 実機計測 (Chrome DevTools Performance タブ): Worklet process 時間の検証
 
 ## ライセンス
 

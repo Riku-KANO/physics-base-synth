@@ -14,4 +14,8 @@ pub trait Voice {
     fn note_id(&self) -> Option<u8>;
     fn age(&self) -> u32;
     fn amplitude(&self) -> f32;
+
+    /// Phase 3 D39: Pitch Bend を半音単位でセット (±2 まで)。
+    /// SmoothedValue で 5 ms tau の遷移を内部管理。
+    fn set_pitch_bend(&mut self, semitones: f32);
 }

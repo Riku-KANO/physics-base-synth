@@ -18,6 +18,10 @@ const REQUIRED = [
   'synth_capacity',
   'synth_process_block',
   'synth_set_polyphony_mode',
+  // Phase 3 追加 (D38 / D39 / D41)
+  'synth_midi_cc',
+  'synth_pitch_bend',
+  'synth_voice_state_ptr',
 ];
 
 const bytes = readFileSync(wasmPath);

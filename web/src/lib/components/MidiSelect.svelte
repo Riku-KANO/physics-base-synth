@@ -5,8 +5,10 @@
 		disposeMidi,
 		listInputs,
 		setActiveInput,
+		setRawListener,
 		type MidiInput
 	} from '$lib/input/midi';
+	import { handleMidiMessage } from '$lib/input/midi-cc';
 	import { synth } from '$lib/state/synth.svelte';
 
 	let supported = $state(false);
@@ -25,6 +27,8 @@
 		})
 			.then(() => {
 				if (!alive) return;
+				// Phase 3 D38 / D42: MIDI CC / Pitch Bend を SynthEngine に橋渡し
+				setRawListener((data) => handleMidiMessage(data, synth.engine));
 				inputs = listInputs();
 			})
 			.catch((e: unknown) => {

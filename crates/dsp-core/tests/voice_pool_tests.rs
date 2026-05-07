@@ -152,6 +152,55 @@ fn test_voice_pool_polyphonic_mix_rms_bounded() {
     assert!(rms <= 0.7, "polyphonic RMS {rms} > 0.7");
 }
 
+/// Phase 3 F38: Modal Body / MIDI CC / Pitch Bend を含む全機能 ON でも alloc ゼロ。
+/// Engine 経由で全 voice に note_on → CC dispatch 連続 → Pitch Bend → process_block 100 回。
+#[test]
+fn test_no_allocation_with_modal_body_and_midi_cc() {
+    let mut e = fresh_engine();
+
+    // baseline は voice 0 の buffer 容量
+    let baseline = e
+        .pool()
+        .voice(0)
+        .expect("voice 0 must exist")
+        .buffer_capacity();
+
+    // 全 8 voice に note_on
+    for i in 0..8 {
+        e.note_on(60 + i, 0.8);
+    }
+    // CC dispatch を連続発火（Mod Wheel = no-op、CC#7/#64/#123 と Pitch Bend）
+    for _ in 0..100 {
+        e.handle_midi_cc(1, 0.5); // Mod Wheel (no-op)
+        e.handle_midi_cc(7, 0.5);
+        e.handle_midi_cc(64, 1.0);
+    }
+    e.handle_pitch_bend(1.0);
+    e.set_param(ParamId::BodyWet as u32, 0.7);
+    e.set_param(ParamId::PickPosition as u32, 0.25);
+
+    // 100 ブロック ≈ 12800 sample ≈ 0.27秒 process
+    let mut l = vec![0.0_f32; 128];
+    let mut r = vec![0.0_f32; 128];
+    for _ in 0..100 {
+        e.process(&mut l, &mut r);
+    }
+
+    // 各 voice の buffer 容量が不変
+    for i in 0..8 {
+        let len = e
+            .pool()
+            .voice(i)
+            .expect("voice must exist")
+            .buffer_capacity();
+        assert_eq!(
+            len, baseline,
+            "voice {} buffer.len() changed: {} → {}",
+            i, baseline, len
+        );
+    }
+}
+
 #[test]
 fn test_no_allocation_in_polyphonic_process() {
     // F17 補助: process_sample 経路でヒープ確保が増えていないかを「length_int 不変」で

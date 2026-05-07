@@ -1,6 +1,7 @@
 import { base } from '$app/paths';
 import type { ToWorkletMessage, FromWorkletMessage } from './messages';
 import wasmUrl from '$lib/wasm/wasm_audio.wasm?url';
+import { voiceState } from './voice-state.svelte';
 
 interface ReadyHandlers {
 	resolve: () => void;
@@ -19,6 +20,8 @@ export class SynthEngine {
 	private currentParams = new Map<number, number>();
 	private pendingParams = new Map<number, number>();
 	private rafHandle: number | null = null;
+
+	private _lastPitchBend = 0;
 
 	private _readyHandlers: ReadyHandlers | null = null;
 
@@ -73,20 +76,30 @@ export class SynthEngine {
 			});
 
 			this.node.port.onmessage = (e: MessageEvent<FromWorkletMessage>) => {
+				const data = e.data;
+				if (data.type === 'voiceState') {
+					voiceState.activeMask = data.activeMask;
+					// postMessage で structured clone された Float32Array は ArrayBufferLike base
+					// なので、Float32Array<ArrayBuffer> 型に再ラップしてから代入する。
+					const amps = new Float32Array(data.amplitudes.length);
+					amps.set(data.amplitudes);
+					voiceState.amplitudes = amps;
+					return;
+				}
 				const h = this._readyHandlers;
-				if (e.data.type === 'debug') {
-					console.warn('[Worklet]', e.data.message);
+				if (data.type === 'debug') {
+					console.warn('[Worklet]', data.message);
 					return;
 				}
 				if (!h) return;
-				if (e.data.type === 'ready' && !h.settled) {
+				if (data.type === 'ready' && !h.settled) {
 					h.markSettled();
 					this.ready = true;
 					h.resolve();
-				} else if (e.data.type === 'error' && !h.settled) {
+				} else if (data.type === 'error' && !h.settled) {
 					h.markSettled();
-					console.error('[Worklet]', e.data.message);
-					h.reject(new Error(e.data.message));
+					console.error('[Worklet]', data.message);
+					h.reject(new Error(data.message));
 				}
 			};
 
@@ -136,11 +149,30 @@ export class SynthEngine {
 	}
 
 	/**
-	 * mono / poly 切替 (D17 / D21)。離散的なイベントなので rAF スロットルせず即時送信する。
+	 * mono / poly 切替 (D17 / D21 / D42)。離散的なイベントなので rAF スロットルせず即時送信する。
 	 */
 	setMode(mode: 'poly' | 'mono'): void {
 		if (!this.ready) return;
 		this.post({ type: 'setMode', mode });
+	}
+
+	/**
+	 * Phase 3 D38: MIDI CC (CC#7 / #64 / #123)。`value` は 0..127、ここで 0..1 に正規化。
+	 */
+	sendMidiCc(cc: number, value: number): void {
+		if (!this.ready) return;
+		const normalized = Math.max(0, Math.min(1, value / 127));
+		this.post({ type: 'midiCC', cc, value: normalized });
+	}
+
+	/**
+	 * Phase 3 D39: Pitch Bend (±2 半音)。連続値で flooding しないため前値一致で skip (R28)。
+	 */
+	sendPitchBend(semitones: number): void {
+		if (!this.ready) return;
+		if (semitones === this._lastPitchBend) return;
+		this._lastPitchBend = semitones;
+		this.post({ type: 'pitchBend', semitones });
 	}
 
 	private flushParams(): void {

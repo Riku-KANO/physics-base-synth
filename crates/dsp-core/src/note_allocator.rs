@@ -70,6 +70,7 @@ mod tests {
         fn amplitude(&self) -> f32 {
             self.amp
         }
+        fn set_pitch_bend(&mut self, _semitones: f32) {}
     }
 
     fn voice(amp: f32, age: u32) -> MockVoice {

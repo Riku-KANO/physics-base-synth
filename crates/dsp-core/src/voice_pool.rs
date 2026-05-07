@@ -90,6 +90,22 @@ impl<const N: usize> VoicePool<N> {
         }
     }
 
+    /// Phase 3 D34: pick position β を全 voice に fan-out。次回 note_on で反映。
+    pub fn set_pick_position(&mut self, value: f32) {
+        let clamped = ParamId::PickPosition.descriptor().clamp(value);
+        for v in self.voices.iter_mut() {
+            v.set_pick_position(clamped);
+        }
+    }
+
+    /// Phase 3 D39: Pitch Bend を全 voice に fan-out（半音単位、±2 にクランプ）。
+    pub fn set_pitch_bend(&mut self, semitones: f32) {
+        let clamped = semitones.clamp(-2.0, 2.0);
+        for v in self.voices.iter_mut() {
+            v.set_pitch_bend(clamped);
+        }
+    }
+
     pub fn reset(&mut self) {
         for v in self.voices.iter_mut() {
             v.reset();

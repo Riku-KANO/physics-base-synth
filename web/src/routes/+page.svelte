@@ -4,6 +4,8 @@
 	import Keyboard from '$lib/components/Keyboard.svelte';
 	import MidiSelect from '$lib/components/MidiSelect.svelte';
 	import ParamSlider from '$lib/components/ParamSlider.svelte';
+	import VoiceMeter from '$lib/components/VoiceMeter.svelte';
+	import PolyphonyToggle from '$lib/components/PolyphonyToggle.svelte';
 	import { pcKeyboard } from '$lib/actions/pc-keyboard.svelte';
 	import { PARAM_IDS } from '$lib/audio/messages';
 	import { synth } from '$lib/state/synth.svelte';
@@ -34,7 +36,13 @@
 		}
 	}}
 >
-	<h1>Physics-Base Synth</h1>
+	<header class="header">
+		<h1>Physics-Base Synth</h1>
+		<div class="header-controls">
+			<VoiceMeter />
+			<PolyphonyToggle />
+		</div>
+	</header>
 	<StartButton />
 	<MidiSelect />
 	<button onclick={testNoteC4} disabled={!synth.ready}>Play C4 (test)</button>
@@ -58,6 +66,18 @@
 			step={0.01}
 			bind:value={synth.outputGain}
 		/>
+		<ParamSlider
+			label="Pick Position"
+			paramId={PARAM_IDS.PickPosition}
+			step={0.01}
+			bind:value={synth.pickPosition}
+		/>
+		<ParamSlider
+			label="Body Wet"
+			paramId={PARAM_IDS.BodyWet}
+			step={0.01}
+			bind:value={synth.bodyWet}
+		/>
 	</section>
 
 	<Keyboard />
@@ -73,6 +93,18 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
+	}
+	.header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+	}
+	.header-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
 	}
 	.hint {
 		color: #666;
