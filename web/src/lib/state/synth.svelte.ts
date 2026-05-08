@@ -9,6 +9,9 @@ class SynthState {
 	outputGain = $state(PARAM_DESCRIPTORS[PARAM_IDS.OutputGain].default);
 	pickPosition = $state(PARAM_DESCRIPTORS[PARAM_IDS.PickPosition].default);
 	bodyWet = $state(PARAM_DESCRIPTORS[PARAM_IDS.BodyWet].default);
+	// Phase 4a D49 / F41: Mod Wheel (CC#1) UI 状態 (0..1)。
+	// LFO controls / preset / instrument の他 $state は Step 13 で追加。
+	modWheel = $state(0.0);
 }
 
 export const synth = new SynthState();

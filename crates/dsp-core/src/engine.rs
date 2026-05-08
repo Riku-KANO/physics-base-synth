@@ -204,7 +204,9 @@ impl Engine {
         let v = value_normalized.clamp(0.0, 1.0);
         match cc {
             CC_MOD_WHEEL => {
-                // Phase 4 送り: LFO 仕様確定後に対応 (D39)。現状 no-op。
+                // Phase 4a D49: Mod Wheel を LFO depth の master 乗数として保持。
+                // Phase 3 では no-op だった経路を有効化。
+                self.mod_wheel.set_target(v);
             }
             CC_CHANNEL_VOLUME => {
                 // D38b: OutputGain と直交、final = output_gain * channel_volume
