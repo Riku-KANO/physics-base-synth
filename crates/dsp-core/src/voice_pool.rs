@@ -114,6 +114,24 @@ impl<const N: usize> VoicePool<N> {
         }
     }
 
+    /// Phase 4a D48: LFO Pitch factor (Engine 側で exp2 済) を全 voice に fan-out。
+    /// per sample 呼出される。Engine 側で 1 回 exp2 計算した値を全 voice に配るので
+    /// per voice exp2 を回避できる。
+    #[inline(always)]
+    pub fn set_lfo_pitch_factor(&mut self, factor: f32) {
+        for v in self.voices.iter_mut() {
+            v.set_lfo_pitch_factor(factor);
+        }
+    }
+
+    /// Phase 4a D48: LFO Brightness offset を全 voice に fan-out。
+    #[inline(always)]
+    pub fn set_lfo_brightness_offset(&mut self, offset: f32) {
+        for v in self.voices.iter_mut() {
+            v.set_lfo_brightness_offset(offset);
+        }
+    }
+
     pub fn reset(&mut self) {
         for v in self.voices.iter_mut() {
             v.reset();

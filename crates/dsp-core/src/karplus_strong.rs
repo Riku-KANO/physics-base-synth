@@ -42,6 +42,14 @@ pub struct KarplusStrong {
     current_note: Option<u8>,
     /// 最後の note_on からの経過サンプル数。voice stealing の oldest 判定に使用
     age_samples: u32,
+    /// Phase 4a D48: LFO Pitch factor (Engine 側で `exp2(-semitones/12)` 計算済、毎 sample 更新)。
+    /// `process_sample` で `length_target.next_sample() * lfo_pitch_factor` で動的 length。
+    /// 初期値 1.0 = pitch offset 0 と等価 (Phase 3 互換)。
+    lfo_pitch_factor: f32,
+    /// Phase 4a D48: LFO Brightness offset (毎 sample 更新)。
+    /// `process_sample` で `(brightness + offset).clamp(0, 1)` として適用。
+    /// 初期値 0.0 = brightness offset なし (Phase 3 互換)。
+    lfo_brightness_offset: f32,
 }
 
 impl KarplusStrong {
@@ -67,7 +75,22 @@ impl KarplusStrong {
             note_off_target_damping: NOTE_OFF_DAMPING,
             current_note: None,
             age_samples: 0,
+            lfo_pitch_factor: 1.0,
+            lfo_brightness_offset: 0.0,
         }
+    }
+
+    /// Phase 4a D48: LFO Pitch factor を毎 sample 更新 (VoicePool fan-out 経由)。
+    /// Engine 側で `exp2(-semitones/12)` 計算済の値を受け取る (per voice exp2 を回避)。
+    #[inline(always)]
+    pub fn set_lfo_pitch_factor(&mut self, factor: f32) {
+        self.lfo_pitch_factor = factor;
+    }
+
+    /// Phase 4a D48: LFO Brightness offset を毎 sample 更新 (VoicePool fan-out 経由)。
+    #[inline(always)]
+    pub fn set_lfo_brightness_offset(&mut self, offset: f32) {
+        self.lfo_brightness_offset = offset;
     }
 
     pub fn prepare(&mut self, sample_rate: f32, _max_block_size: usize) {
@@ -261,6 +284,9 @@ impl KarplusStrong {
         self.active = false;
         self.current_note = None;
         self.age_samples = 0;
+        // Phase 4a: LFO 適用値を初期状態へ (Phase 3 互換)
+        self.lfo_pitch_factor = 1.0;
+        self.lfo_brightness_offset = 0.0;
     }
 
     #[inline(always)]
@@ -272,14 +298,16 @@ impl KarplusStrong {
         let buf_len = self.buffer.len();
 
         // 定常時は length 再分解と Thiran 係数再計算を skip (差分 < 1e-5)。
-        let new_len = self.length_target.next_sample();
-        if (new_len - self.cached_length).abs() > 1e-5 {
+        // Phase 4a D48: LFO Pitch factor を実効 length に乗算 (factor は Engine 側で exp2 済)。
+        let base_target = self.length_target.next_sample();
+        let effective_length = base_target * self.lfo_pitch_factor;
+        if (effective_length - self.cached_length).abs() > 1e-5 {
             let max_len = (buf_len - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
-            let clamped = new_len.clamp(3.0, max_len);
+            let clamped = effective_length.clamp(3.0, max_len);
             self.length_int = clamped as usize;
             let frac = clamped - self.length_int as f32;
             self.thiran.set_fractional(frac);
-            self.cached_length = new_len;
+            self.cached_length = effective_length;
         }
 
         // Pitch Bend で length_int が動的に変わるため、剰余は `% buf_len` のみ。
@@ -288,7 +316,8 @@ impl KarplusStrong {
 
         let read_value = self.thiran.process(self.buffer[read_z]);
 
-        let b = self.brightness.next_sample();
+        // Phase 4a D48: brightness LPF に LFO offset を加算してから clamp。
+        let b = (self.brightness.next_sample() + self.lfo_brightness_offset).clamp(0.0, 1.0);
         let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
         self.last_filter_out = filtered;
 

@@ -34,4 +34,12 @@ impl Voice for KarplusStrong {
     fn set_pitch_bend(&mut self, semitones: f32) {
         KarplusStrong::set_pitch_bend(self, semitones);
     }
+
+    fn set_lfo_pitch_factor(&mut self, factor: f32) {
+        KarplusStrong::set_lfo_pitch_factor(self, factor);
+    }
+
+    fn set_lfo_brightness_offset(&mut self, offset: f32) {
+        KarplusStrong::set_lfo_brightness_offset(self, offset);
+    }
 }

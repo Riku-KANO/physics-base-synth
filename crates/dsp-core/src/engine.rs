@@ -24,6 +24,13 @@ const MOD_WHEEL_TAU: f32 = 0.05;
 const LFO_DEPTH_DEFAULT: f32 = 0.0;
 const LFO_DEPTH_TAU: f32 = 0.05;
 
+/// Phase 4a D48: LFO Pitch destination の深さスケール (depth=1.0 で ±0.5 半音)
+const LFO_PITCH_SCALE_SEMITONES: f32 = 0.5;
+/// Phase 4a D48: LFO Brightness destination の深さスケール (depth=1.0 で ±0.5 brightness offset)
+const LFO_BRIGHTNESS_SCALE: f32 = 0.5;
+/// Phase 4a D48: LFO Volume destination の深さスケール (depth=1.0 で ±0.5 volume multiplier offset)
+const LFO_VOLUME_SCALE: f32 = 0.5;
+
 const CC_MOD_WHEEL: u8 = 1;
 const CC_CHANNEL_VOLUME: u8 = 7;
 const CC_SUSTAIN_PEDAL: u8 = 64;
@@ -411,14 +418,39 @@ impl AudioProcessor for Engine {
         debug_assert_eq!(output_l.len(), output_r.len());
         let n = output_l.len();
         for i in 0..n {
+            // Phase 4a D46-D49: LFO 値を取得し、Mod Wheel で master 制御。
+            let lfo_value = self.lfo.process_sample();
+            let mod_wheel_v = self.mod_wheel.next_sample();
+
+            // D48 Pitch destination: Engine 側で exp2 を 1 回だけ計算して全 voice に fan-out。
+            let pitch_offset_semitones = lfo_value
+                * self.lfo_pitch_depth.next_sample()
+                * mod_wheel_v
+                * LFO_PITCH_SCALE_SEMITONES;
+            let pitch_factor = (-pitch_offset_semitones / 12.0).exp2();
+            self.pool.set_lfo_pitch_factor(pitch_factor);
+
+            // D48 Brightness destination: voice 側で `(brightness + offset).clamp(0,1)` として加算。
+            let brightness_offset = lfo_value
+                * self.lfo_brightness_depth.next_sample()
+                * mod_wheel_v
+                * LFO_BRIGHTNESS_SCALE;
+            self.pool.set_lfo_brightness_offset(brightness_offset);
+
+            // D48 Volume destination: Engine 単位で適用 (per voice 不要)。
+            let volume_multiplier = 1.0
+                + lfo_value * self.lfo_volume_depth.next_sample() * mod_wheel_v * LFO_VOLUME_SCALE;
+
             let dry = self.pool.process_sample();
             let (body_l, body_r) = self.modal_body.process_sample(dry);
             let wet = self.body_wet.next_sample();
             let dry_amount = 1.0 - wet;
             let mixed_l = dry_amount * dry + wet * body_l;
             let mixed_r = dry_amount * dry + wet * body_r;
-            // D38b: final = output_gain × channel_volume (CC#7 と OutputGain は直交)
-            let combined = self.output_gain.next_sample() * self.channel_volume.next_sample();
+            // D38b + Phase 4a D48: final = output_gain × channel_volume × volume_multiplier
+            let combined = self.output_gain.next_sample()
+                * self.channel_volume.next_sample()
+                * volume_multiplier;
             output_l[i] = soft_clip(mixed_l * combined);
             output_r[i] = soft_clip(mixed_r * combined);
         }
