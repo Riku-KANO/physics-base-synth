@@ -154,3 +154,57 @@ pub extern "C" fn synth_voice_state_ptr(handle: *const SynthHandle) -> *const u8
     let h = unsafe { &*handle };
     h.engine.voice_state_ptr()
 }
+
+/// Phase 4a D52 / D53: 楽器プリセット切替。
+/// `kind`: 0=Default, 1=GuitarClassical, 2=Ukulele, 3=Mandolin, 4=Bass, 5=GuitarSteel, 6=Sitar
+/// 不正値 (7 以上) は黙って無視する (synth_set_polyphony_mode と同じ防御的設計)。
+/// 内部で pool.all_notes_off() + Modal 係数差し替え + reset を実行する。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_apply_instrument(handle: *mut SynthHandle, kind: u32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    if let Some(instrument_kind) = dsp_core::params::InstrumentKind::from_u32(kind) {
+        h.engine.apply_instrument(instrument_kind);
+    }
+}
+
+/// Phase 4a D46: LFO レート設定 (0.1〜8.0 Hz、SmoothedValue tau=0.05s で平滑化)。
+/// 範囲外の値は dsp-core 側で clamp。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_lfo_set_rate(handle: *mut SynthHandle, hz: f32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    h.engine.lfo_set_rate(hz);
+}
+
+/// Phase 4a D47: LFO 波形設定。
+/// `kind`: 0=Sine, 1=Triangle。不正値は無視する。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_lfo_set_waveform(handle: *mut SynthHandle, kind: u32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    if let Some(waveform) = dsp_core::lfo::LfoWaveform::from_u32(kind) {
+        h.engine.lfo_set_waveform(waveform);
+    }
+}
+
+/// Phase 4a D48: LFO destination depth 設定。
+/// `dest`: 0=Pitch, 1=Brightness, 2=Volume
+/// `depth`: 0.0〜1.0 (dsp-core 側で clamp)
+/// 不正な dest は無視する。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_lfo_set_depth(handle: *mut SynthHandle, dest: u32, depth: f32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    if let Some(destination) = dsp_core::lfo::LfoDestination::from_u32(dest) {
+        h.engine.lfo_set_depth(destination, depth);
+    }
+}
