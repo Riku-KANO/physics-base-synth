@@ -346,6 +346,7 @@ impl InstrumentKind {
 
 pub const INSTRUMENT_KIND_COUNT: usize = 7;
 
+#[rustfmt::skip]
 pub fn body_modes_for_instrument(
     kind: InstrumentKind,
 ) -> (&'static [BodyMode; 8], &'static [BodyMode; 8]) {

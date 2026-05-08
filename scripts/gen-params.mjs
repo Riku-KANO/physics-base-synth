@@ -305,6 +305,11 @@ export function generateRustSource(paramsJson) {
 		lines.push('');
 
 		// Phase 4a D52 / D54: ヘルパ関数
+		// 1 行で 100 chars 超の match arm (例: GuitarClassical / GuitarSteel) は rustfmt が
+		// 4 行に展開し、短い arm は 1 行で残すため、単純な generator 出力では行ごとに
+		// 整形差が出る。関数全体に `#[rustfmt::skip]` を付けて生成側の出力をそのまま固定する
+		// (Phase 1-3 の BODY_MODES_L と同パターン)。
+		lines.push('#[rustfmt::skip]');
 		lines.push('pub fn body_modes_for_instrument(');
 		lines.push('    kind: InstrumentKind,');
 		lines.push(") -> (&'static [BodyMode; 8], &'static [BodyMode; 8]) {");
