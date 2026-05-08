@@ -460,7 +460,7 @@ export const FACTORY_PRESETS: PresetV1[] = [
 ```typescript
 // web/src/lib/state/preset-store.svelte.ts
 
-import { isValidPresetV1, getDefaultPreset, type PresetV1 } from './preset-schema';
+import { isValidPresetV1, type PresetV1 } from './preset-schema';
 import { FACTORY_PRESETS } from './factory-presets';
 import type { SynthEngine } from '../audio/engine';
 
@@ -475,34 +475,49 @@ class PresetStore {
   currentPresetName = $state<string>('Default');
   errorMessage = $state<string | null>(null);
 
-  /** localStorage から User Preset を読み込み。bad data は skip */
+  /** localStorage から User Preset を読み込み。bad data は skip。
+   *  STORAGE_KEY_LIST 不在時 (User preset 未保存) でも STORAGE_KEY_LAST は読む
+   *  (Factory preset だけを選択して保存しているケースに対応)。
+   *  stale な lastName (削除済み User preset / 存在しない名前) は findByName で検証し、
+   *  なければ 'Default' に fallback。 */
   load(): void {
     try {
+      // 1. User preset リストの読み込み (LIST 不在は単に空 = Factory のみ利用シナリオ)
       const listJson = localStorage.getItem(STORAGE_KEY_LIST);
-      if (!listJson) return;
-      const names = JSON.parse(listJson);
-      if (!Array.isArray(names)) return;
-
-      const loaded: PresetV1[] = [];
-      for (const name of names) {
-        if (typeof name !== 'string') continue;
-        const presetJson = localStorage.getItem(STORAGE_KEY_PREFIX + name);
-        if (!presetJson) continue;
+      if (listJson) {
+        let names: unknown;
         try {
-          const obj = JSON.parse(presetJson);
-          if (isValidPresetV1(obj)) {
-            loaded.push(obj);
-          } else {
-            console.warn(`[PresetStore] Invalid preset ${name}, skipping`);
+          names = JSON.parse(listJson);
+        } catch {
+          names = null;
+        }
+        if (Array.isArray(names)) {
+          const loaded: PresetV1[] = [];
+          for (const name of names) {
+            if (typeof name !== 'string') continue;
+            const presetJson = localStorage.getItem(STORAGE_KEY_PREFIX + name);
+            if (!presetJson) continue;
+            try {
+              const obj = JSON.parse(presetJson);
+              if (isValidPresetV1(obj)) {
+                loaded.push(obj);
+              } else {
+                console.warn(`[PresetStore] Invalid preset ${name}, skipping`);
+              }
+            } catch (e) {
+              console.warn(`[PresetStore] Failed to parse preset ${name}:`, e);
+            }
           }
-        } catch (e) {
-          console.warn(`[PresetStore] Failed to parse preset ${name}:`, e);
+          this.userPresets = loaded;
         }
       }
-      this.userPresets = loaded;
 
+      // 2. last preset 名の読み込み (LIST の有無に関係なく実行)。
+      //    findByName で Factory + User の両方を確認、存在しなければ 'Default' に fallback。
+      //    手動破壊 / 古いデータ / 削除済み User preset で <select> の value が
+      //    option と不一致になるのを防ぐ。
       const lastName = localStorage.getItem(STORAGE_KEY_LAST);
-      if (lastName) this.currentPresetName = lastName;
+      this.currentPresetName = (lastName && this.findByName(lastName)) ? lastName : 'Default';
     } catch (e) {
       console.error('[PresetStore] load failed:', e);
       this.errorMessage = 'Failed to load presets from storage';
