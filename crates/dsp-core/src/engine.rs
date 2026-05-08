@@ -7,17 +7,18 @@ use crate::sustain_state::SustainState;
 use crate::traits::AudioProcessor;
 use crate::voice_pool::{VoicePool, POLYPHONY};
 
-/// Phase 3 D38b: Channel Volume (CC#7) のデフォルト 1.0。OutputGain と直交配置のため、
-/// note_on 時の current_damping 同様 const で持つ。
+/// CC#7 Channel Volume のデフォルト (OutputGain と直交)
 const CHANNEL_VOLUME_DEFAULT: f32 = 1.0;
-/// Phase 3 D38b: Channel Volume の SmoothedValue tau (~20 ms)
 const CHANNEL_VOLUME_TAU: f32 = 0.02;
 
-/// MIDI CC 番号 (subset)
-const CC_MOD_WHEEL: u8 = 1; // Phase 4 送り、no-op
+const CC_MOD_WHEEL: u8 = 1;
 const CC_CHANNEL_VOLUME: u8 = 7;
 const CC_SUSTAIN_PEDAL: u8 = 64;
 const CC_ALL_NOTES_OFF: u8 = 123;
+
+/// Voice State 共有メモリの書き込み stride (1024 sample = ~21 ms @ 48kHz)。
+/// JS Worklet 側の VOICE_STATE_STRIDE_FRAMES と同期。
+const VOICE_STATE_WRITE_STRIDE: u32 = 1024;
 
 /// mono モード復帰時のデフォルト velocity。Phase 3 で「note_off されたキーの velocity を保持」へ拡張候補。
 const MONO_REVIVE_VELOCITY: f32 = 0.8;
@@ -48,8 +49,10 @@ pub struct Engine {
     channel_volume: SmoothedValue,
     /// Phase 3 D40: CC#64 Sustain Pedal の active / pending release 管理
     sustain_state: SustainState,
-    /// Phase 3 D41: Voice State 共有メモリ (active mask 1 byte + 8 振幅 × 4 bytes = 33 bytes)
+    /// Voice State 共有メモリ (active mask 1 byte + 8 振幅 × 4 bytes LE)
     voice_state_buffer: [u8; 33],
+    /// 最後に voice_state_buffer を書き込んでからの経過 sample 数
+    voice_state_sample_counter: u32,
 }
 
 impl Engine {
@@ -67,6 +70,7 @@ impl Engine {
             channel_volume: SmoothedValue::new(CHANNEL_VOLUME_DEFAULT),
             sustain_state: SustainState::new(),
             voice_state_buffer: [0u8; 33],
+            voice_state_sample_counter: 0,
         }
     }
 
@@ -172,41 +176,37 @@ impl Engine {
                 self.channel_volume.set_target(v);
             }
             CC_SUSTAIN_PEDAL => {
-                // ≥ 64 (= 0.5 normalized) で on、それ以下で off
-                let active = v >= 0.5;
-                let released = self.sustain_state.set_active(active);
-                if released != 0 {
-                    // active=false 移行時の pending を全 release
-                    for note in 0..128_u8 {
-                        if (released >> note) & 1 == 1 {
-                            self.pool.note_off(note);
-                        }
-                    }
-                }
+                // ≥ 64 (= 0.5 normalized) で on
+                let released = self.sustain_state.set_active(v >= 0.5);
+                self.release_pending(released);
             }
             CC_ALL_NOTES_OFF => {
-                // P1-1: sustain も reset（忘れると古い pending が CC#64 操作で再処理される）
-                for note in 0..128_u8 {
-                    self.pool.note_off(note);
-                }
+                // P1-1: sustain も reset しないと古い pending が次の CC#64 操作で再処理される
+                self.pool.all_notes_off();
                 self.hold_stack.clear();
                 self.sustain_state.reset();
             }
-            _ => {} // 未対応 CC は no-op (panic / alloc なし)
+            _ => {}
+        }
+    }
+
+    /// pending bitmap の各 set bit に対して `pool.note_off` を発火する。
+    /// 128 線形ループの代わりに `trailing_zeros` で set bit のみを舐める。
+    fn release_pending(&mut self, mut bitmap: u128) {
+        while bitmap != 0 {
+            let note = bitmap.trailing_zeros() as u8;
+            self.pool.note_off(note);
+            bitmap &= bitmap - 1;
         }
     }
 
     pub fn set_mode(&mut self, mode: SynthMode) {
-        // Phase 3 D40 P2-1: 切替前に pending を全 release してから sustain_state.reset()。
-        // mode 切替で Sustain pending が宙ぶらりんにならないよう、各 note を即時 release。
+        // P2-1: 切替前に pending を全 release してから reset。mode 切替で Sustain pending が
+        // 宙ぶらりんにならないよう、各 note を即時 release する。
         let pending = self.sustain_state.pending_release_bitmap();
         if pending != 0 {
             self.sustain_state.reset();
-            for note in 0..128_u8 {
-                if (pending >> note) & 1 == 1 {
-                    self.pool.note_off(note);
-                }
-            }
+            self.release_pending(pending);
         }
         self.mode = mode;
         self.hold_stack.clear();
@@ -299,23 +299,26 @@ impl AudioProcessor for Engine {
 
     fn process(&mut self, output_l: &mut [f32], output_r: &mut [f32]) {
         debug_assert_eq!(output_l.len(), output_r.len());
-        for i in 0..output_l.len() {
+        let n = output_l.len();
+        for i in 0..n {
             let dry = self.pool.process_sample();
             let (body_l, body_r) = self.modal_body.process_sample(dry);
             let wet = self.body_wet.next_sample();
             let dry_amount = 1.0 - wet;
             let mixed_l = dry_amount * dry + wet * body_l;
             let mixed_r = dry_amount * dry + wet * body_r;
-            let g = self.output_gain.next_sample();
-            // Phase 3 D38b: final = output_gain * channel_volume (CC#7 と OutputGain は直交)
-            let cv = self.channel_volume.next_sample();
-            let combined = g * cv;
-            // Phase 3 D43: output_gain 後・write 前に区間関数型 soft clip
+            // D38b: final = output_gain × channel_volume (CC#7 と OutputGain は直交)
+            let combined = self.output_gain.next_sample() * self.channel_volume.next_sample();
             output_l[i] = soft_clip(mixed_l * combined);
             output_r[i] = soft_clip(mixed_r * combined);
         }
-        // Phase 3 D41: process block 終端で voice state を共有メモリへ書き込み
-        self.write_voice_state();
+        // JS 側 voice state は VOICE_STATE_WRITE_STRIDE 毎に push されるため、それより
+        // 細かく書き込んでも上書きで読み捨てられる。stride を超えた直後の 1 ブロックでだけ書く。
+        self.voice_state_sample_counter = self.voice_state_sample_counter.saturating_add(n as u32);
+        if self.voice_state_sample_counter >= VOICE_STATE_WRITE_STRIDE {
+            self.voice_state_sample_counter = 0;
+            self.write_voice_state();
+        }
     }
 
     fn reset(&mut self) {
@@ -328,6 +331,7 @@ impl AudioProcessor for Engine {
         self.sustain_state.reset();
         self.hold_stack.clear();
         self.voice_state_buffer = [0u8; 33];
+        self.voice_state_sample_counter = 0;
     }
 }
 

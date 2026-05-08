@@ -176,12 +176,15 @@ fn test_engine_process_block_timing() {
 
 #[test]
 fn test_engine_voice_state_buffer_format() {
-    // Phase 3 D41: 33 byte レイアウト (active mask 1 + 8 voice × f32 4 bytes = 33)
+    // Phase 3 D41: 33 byte レイアウト (active mask 1 + 8 voice × f32 4 bytes = 33)。
+    // voice_state は 1024 sample 毎にしか書かれないため、8 ブロック分 process して trigger する。
     let mut e = fresh_engine();
     e.note_on(60, 0.8);
     let mut l = vec![0.0_f32; 128];
     let mut r = vec![0.0_f32; 128];
-    e.process(&mut l, &mut r);
+    for _ in 0..8 {
+        e.process(&mut l, &mut r);
+    }
 
     let ptr = e.voice_state_ptr();
     assert!(!ptr.is_null());

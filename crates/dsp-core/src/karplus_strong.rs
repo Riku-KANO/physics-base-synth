@@ -9,9 +9,7 @@ const ENERGY_RISE: f32 = 0.001;
 const ENERGY_DECAY: f32 = 0.999;
 const ENERGY_THRESHOLD: f32 = 1.0e-9;
 const MIN_FREQ_HZ: f32 = 27.5;
-/// Phase 3 D36 案 D 採用後は Thiran 1 点読みなので margin 0 でも動くが、
-/// Pitch Bend での length 過剰時の境界保護として 1 サンプル余裕を残す。
-/// 旧 Lagrange 実装のため 3 だった margin は Thiran 切替で 1 に縮小。
+/// Pitch Bend で length が過剰になったときの境界保護に 1 sample 余裕を残す。
 pub(crate) const FRACTIONAL_DELAY_BUFFER_MARGIN: usize = 1;
 
 pub struct KarplusStrong {
@@ -19,23 +17,20 @@ pub struct KarplusStrong {
     write_index: usize,
     /// 整数部のディレイ長
     length_int: usize,
-    /// note_on 時にキャッシュした分数部の補間係数 (D26)。Phase 3 D36 案 D 採用で
-    /// `LagrangeCoeffs` を `ThiranCoeffs` に置換 (A4 0.0002% 精度、|H(ω)|=1 allpass)。
+    /// note_on 時にキャッシュした分数部の補間係数 (D26)
     thiran: ThiranCoeffs,
-    /// Phase 3 D33: 弦の周波数依存損失を再現する 1 段 FIR (1+ρ·z⁻¹)/(1+ρ)
+    /// 弦の周波数依存損失 (1+ρ·z⁻¹)/(1+ρ)
     loss_filter: LossFilter,
-    /// Phase 3 D34: ピック位置 β ∈ [0.05, 0.5]。SmoothedValue 化せず、
-    /// 次回 note_on で励振 shaping に反映（process 中の動的変更は連打で追従）。
+    /// ピック位置 β ∈ [0.05, 0.5]。次回 note_on の励振 shaping で反映
     pick_position: f32,
     damping: SmoothedValue,
     brightness: SmoothedValue,
-    /// Phase 3 D39: Pitch Bend 適用後の length 目標 (5 ms tau で SmoothedValue)
+    /// Pitch Bend 適用後の length 目標 (5 ms tau で SmoothedValue)
     length_target: SmoothedValue,
-    /// process_sample 内の length 再分解 skip 判定用 (R26 対策)
+    /// process_sample 内の length 再分解 skip 判定用
     cached_length: f32,
-    /// Pitch Bend 0 のときの adjusted_length (D37 補正済み)
+    /// Pitch Bend 0 のときの adjusted_length (brightness 群遅延補正済み)
     base_length: f32,
-    /// 現在の Pitch Bend 値 (clamp(-2.0, 2.0))
     pitch_bend_semitones: f32,
     last_filter_out: f32,
     energy: f32,
@@ -103,14 +98,12 @@ impl KarplusStrong {
         self.rng = XorShift32::new(seed);
     }
 
-    /// Phase 3 D34: 次回 note_on で適用される pick position β を更新。
-    /// β は [0.05, 0.5] へ clamp。process 中の音色変化は次回 note_on で反映される。
+    /// β は [0.05, 0.5] へ clamp。process 中の変更は次回 note_on で反映 (D34)。
     pub fn set_pick_position(&mut self, beta: f32) {
         self.pick_position = beta.clamp(0.05, 0.5);
     }
 
     /// trait `Voice` 互換用 (note_id 不明、`current_note = None` で励振)。
-    /// 内部実装は `note_on_internal(None, ...)` に委譲。
     pub fn note_on(&mut self, freq_hz: f32, velocity: f32) {
         self.note_on_internal(None, freq_hz, velocity);
     }
@@ -120,17 +113,15 @@ impl KarplusStrong {
         self.note_on_internal(Some(midi_note), freq_hz, velocity);
     }
 
-    /// 共通実装。`note_id` の取り扱いは引数の `Option<u8>` に従う。
-    /// `Some(0)` と `None` を取り違えるバグを設計レベルで排除（P1 対策）。
+    /// `note_id` を `Option<u8>` で受けるのは `Some(0)` と `None` の取り違えを設計レベルで排除するため。
     fn note_on_internal(&mut self, note_id: Option<u8>, freq_hz: f32, velocity: f32) {
         let raw_len = self.sample_rate / freq_hz.max(1.0);
         let max_len_usize = self
             .buffer
             .len()
             .saturating_sub(FRACTIONAL_DELAY_BUFFER_MARGIN);
-        // Phase 3 D37: Brightness LPF の 1 段 IIR は τ_g(b) = (1-b)/b の群遅延を持ち、
-        // ピッチを下方偏移させる (b=0.5 で 1 sample、b=1.0 で 0)。note_on 時に
-        // adjusted_length = raw_length - τ_g で補正する。
+        // Brightness LPF (1 段 IIR) の τ_g(b) = (1-b)/b 群遅延がピッチを下方偏移させる
+        // ため、note_on 時に raw_length から差し引いて補正する (b=0.5 で 1 sample、b=1.0 で 0)。
         let brightness = self.brightness.target();
         let tau_g = if brightness > 0.001 {
             ((1.0 - brightness) / brightness).clamp(0.0, raw_len - 3.0)
@@ -143,16 +134,12 @@ impl KarplusStrong {
 
         self.length_int = len_int;
         self.thiran.set_fractional(len_frac);
-        // Thiran は IIR で内部状態を保つため、note_on 連打時に前 note の状態が
-        // 引き継がれると過渡応答が暴れる。新規励振では state をクリア。
+        // Thiran は IIR、note_on 連打で前 note の状態を引き継ぐと過渡応答が暴れる。
         self.thiran.reset();
-        // Phase 3 D33: 周波数依存式で ρ を再算出。state z1 はリセットしない（過渡応答を引き継いでも実害なし）
         self.loss_filter.set_for_frequency(freq_hz);
 
-        // Phase 3 D34: Pick position 励振 shaping。
-        // 1. buffer 全体ゼロクリア → 先頭 length_int に noise burst をロード
-        // 2. K = round(β · length_int)、length_int-1 へ clamp
-        // 3. K > 0 なら降順ループで buffer[i] -= buffer[i - K] を in-place 適用
+        // Pick position 励振 shaping: noise burst を `buffer[i] -= buffer[i - K]` で
+        // in-place comb 整形。K = round(β · length_int)、length_int-1 へ clamp。
         for v in self.buffer.iter_mut() {
             *v = 0.0;
         }
@@ -175,16 +162,13 @@ impl KarplusStrong {
         self.age_samples = 0;
         self.current_note = note_id;
 
-        // Phase 3 D39: Pitch Bend baseline。base_length は補正済 adjusted、
-        // length_target を即座に同値で set_immediate（既存 SmoothedValue API、P3 対策）
         self.base_length = adjusted;
         self.pitch_bend_semitones = 0.0;
         self.length_target.set_immediate(adjusted);
         self.cached_length = adjusted;
     }
 
-    /// Phase 3 D39: Pitch Bend を半音単位でセット (±2 にクランプ)。
-    /// length_target = base_length × 2^(-semitones/12) を SmoothedValue で 5 ms tau で遷移。
+    /// length_target = base_length × 2^(-semitones/12) を 5 ms tau で滑らかに追従 (D39)。
     pub fn set_pitch_bend(&mut self, semitones: f32) {
         let clamped = semitones.clamp(-2.0, 2.0);
         self.pitch_bend_semitones = clamped;
@@ -197,11 +181,8 @@ impl KarplusStrong {
         self.length_target.set_target(target.clamp(3.0, max_len));
     }
 
-    /// テスト専用: 任意の length_int で励振する経路（K=0 分岐の到達確認用）。
-    /// 公開 API の β min は 0.05、length_int 最小は 3 のため通常は K ≥ 1 だが、
-    /// length_int=9 + β=0.05 で積 = 0.45 → round = 0 を踏める。
-    /// integration test (tests/) からも呼べるように `#[cfg(test)]` ではなく
-    /// `#[doc(hidden)]` のみで露出する。
+    /// テスト専用: 任意の length_int で励振 (K=0 分岐の到達確認用)。
+    /// 公開 β min は 0.05、length_int=9 + β=0.05 で K=round(0.45)=0 を踏める。
     #[doc(hidden)]
     pub fn note_on_with_length_for_test(&mut self, length_int: usize, beta: f32, velocity: f32) {
         debug_assert!(length_int >= 3);
@@ -252,13 +233,12 @@ impl KarplusStrong {
         self.damping.target()
     }
 
-    /// テスト用: buffer 容量を直接読む（pick shaping の no-alloc 検証）
     #[doc(hidden)]
     pub fn buffer_capacity(&self) -> usize {
         self.buffer.len()
     }
 
-    /// テスト用: 励振直後の buffer 内容（length_int 分）を読む（pick shaping 効果の検証）
+    /// テスト用: 励振直後の buffer の先頭 `length_int` を読む。alloc を含むので production 経路では使わない。
     #[doc(hidden)]
     pub fn excitation_snapshot(&self) -> Vec<f32> {
         self.buffer[..self.length_int].to_vec()
@@ -291,8 +271,7 @@ impl KarplusStrong {
 
         let buf_len = self.buffer.len();
 
-        // Phase 3 D39: Pitch Bend で length_target が変動する場合のみ length 再分解。
-        // R26 対策: 定常時 (差分 < 1e-5) は再計算 skip。
+        // 定常時は length 再分解と Thiran 係数再計算を skip (差分 < 1e-5)。
         let new_len = self.length_target.next_sample();
         if (new_len - self.cached_length).abs() > 1e-5 {
             let max_len = (buf_len - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
@@ -303,8 +282,8 @@ impl KarplusStrong {
             self.cached_length = new_len;
         }
 
-        // Thiran は 1 点読み取り。
-        // ring buffer 不変条件: write_index / read 位置とも `% buf_len`、`% length_int` 不可。
+        // Pitch Bend で length_int が動的に変わるため、剰余は `% buf_len` のみ。
+        // `% length_int` だと write/read で異なる剰余系になり buffer の論理長が破綻する。
         let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
 
         let read_value = self.thiran.process(self.buffer[read_z]);
@@ -313,7 +292,6 @@ impl KarplusStrong {
         let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
         self.last_filter_out = filtered;
 
-        // Phase 3 D33: brightness LPF 直後・damping 前に loss filter
         let loss_out = self.loss_filter.process_sample(filtered);
 
         let d = self.damping.next_sample();

@@ -36,6 +36,7 @@ impl LossFilter {
         self.z1 = 0.0;
     }
 
+    #[doc(hidden)]
     pub fn rho(&self) -> f32 {
         self.rho
     }

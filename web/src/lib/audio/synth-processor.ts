@@ -47,6 +47,8 @@ class SynthProcessor extends AudioWorkletProcessor {
 	private leftView: Float32Array | null = null;
 	private rightView: Float32Array | null = null;
 	private voiceStateView: Uint8Array | null = null;
+	private voiceStateDataView: DataView | null = null;
+	private readonly voiceStateAmps = new Float32Array(NUM_VOICES);
 	private generation = 0;
 	private warnedFrameLength = false;
 	private framesSinceVoiceStatePush = 0;
@@ -103,6 +105,7 @@ class SynthProcessor extends AudioWorkletProcessor {
 		this.leftView = null;
 		this.rightView = null;
 		this.voiceStateView = null;
+		this.voiceStateDataView = null;
 		this.exports = null;
 		this.framesSinceVoiceStatePush = 0;
 	}
@@ -131,6 +134,7 @@ class SynthProcessor extends AudioWorkletProcessor {
 			const localLeftView = new Float32Array(memBuf, localLPtr, FRAMES);
 			const localRightView = new Float32Array(memBuf, localRPtr, FRAMES);
 			const localVoiceStateView = new Uint8Array(memBuf, localVsPtr, VOICE_STATE_BYTES);
+			const localVoiceStateDV = new DataView(memBuf, localVsPtr, VOICE_STATE_BYTES);
 
 			if (myGen !== this.generation) {
 				localExports.synth_free(localHandle);
@@ -146,6 +150,7 @@ class SynthProcessor extends AudioWorkletProcessor {
 			this.leftView = localLeftView;
 			this.rightView = localRightView;
 			this.voiceStateView = localVoiceStateView;
+			this.voiceStateDataView = localVoiceStateDV;
 
 			const ready: FromWorkletMessage = { type: 'ready' };
 			this.port.postMessage(ready);
@@ -170,6 +175,7 @@ class SynthProcessor extends AudioWorkletProcessor {
 		this.leftView = new Float32Array(memBuf, this.lPtr, FRAMES);
 		this.rightView = new Float32Array(memBuf, this.rPtr, FRAMES);
 		this.voiceStateView = new Uint8Array(memBuf, this.voiceStatePtr, VOICE_STATE_BYTES);
+		this.voiceStateDataView = new DataView(memBuf, this.voiceStatePtr, VOICE_STATE_BYTES);
 	}
 
 	private silence(out: Float32Array[]): void {
@@ -181,24 +187,16 @@ class SynthProcessor extends AudioWorkletProcessor {
 		this.framesSinceVoiceStatePush += FRAMES;
 		if (this.framesSinceVoiceStatePush < VOICE_STATE_STRIDE_FRAMES) return;
 		this.framesSinceVoiceStatePush = 0;
-		if (!this.voiceStateView) return;
-		// view が detach されていれば 0 になる
+		if (!this.voiceStateView || !this.voiceStateDataView) return;
 		if (this.voiceStateView.byteLength === 0) {
 			this.refreshViews();
-			if (!this.voiceStateView) return;
+			if (!this.voiceStateView || !this.voiceStateDataView) return;
 		}
 		const mask = this.voiceStateView[0];
-		// 8 振幅を Float32 として読む。view を新規確保せずに DataView 経由で読む。
-		const amps = new Float32Array(NUM_VOICES);
+		const dv = this.voiceStateDataView;
+		const amps = this.voiceStateAmps;
 		for (let i = 0; i < NUM_VOICES; i++) {
-			const off = 1 + i * 4;
-			// little-endian f32 を組み立て
-			const b0 = this.voiceStateView[off];
-			const b1 = this.voiceStateView[off + 1];
-			const b2 = this.voiceStateView[off + 2];
-			const b3 = this.voiceStateView[off + 3];
-			const u32 = (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
-			amps[i] = new Float32Array(new Uint32Array([u32 >>> 0]).buffer)[0];
+			amps[i] = dv.getFloat32(1 + i * 4, true);
 		}
 		const msg: FromWorkletMessage = {
 			type: 'voiceState',

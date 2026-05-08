@@ -1,12 +1,12 @@
-// Phase 3 D41 / F34: Voice Meter UI 表示用の共有 state。
-// SynthEngine が Worklet からの `voiceState` メッセージを受信して更新、
-// VoiceMeter コンポーネントが `$state` 経由で再描画する。
-
 const NUM_VOICES = 8;
+
+// `Float32Array<ArrayBufferLike>` を明示することで、postMessage で構造化複製された
+// `Float32Array<ArrayBuffer>` も `Float32Array<SharedArrayBuffer>` も代入可能にする。
+type AmpView = Float32Array<ArrayBufferLike>;
 
 export class VoiceState {
 	activeMask = $state(0);
-	amplitudes = $state(new Float32Array(NUM_VOICES));
+	amplitudes: AmpView = $state(new Float32Array(NUM_VOICES));
 
 	isActive(index: number): boolean {
 		return ((this.activeMask >> index) & 1) === 1;

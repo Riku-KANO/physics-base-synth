@@ -1,24 +1,9 @@
-//! Fractional delay 補間。
+//! Fractional delay interpolation.
 //!
-//! Phase 1 / 2: `LagrangeCoeffs` 4 点 FIR 補間で fractional 部 d ∈ [0, 1) を実装。
-//! C8 (4186 Hz, length ≈ 11.466) で `|H_lag(C8)| ≈ 0.998` のため loop gain < 1 となり
-//! `test_pitch_c8` は ignore 対象だった (Phase 2 retrospective §4.1)。
-//!
-//! Phase 3 Step 1 の試作評価 (D36) で `ThiranCoeffs` 1 次 allpass を試し、
-//! A1〜C6 で誤差が桁違いに改善 (A4: 0.89% → 0.0002%、~4000×) することを確認。
-//! C8 は damping=0.9999 で loop gain < 1 となる物理限界が Lagrange/Thiran 共通のため、
-//! どちらでも自己発振 / 計測精度ともに改善せず ignore 継続が必要。
-//!
-//! 結論 (案 D): **全 voice を Thiran で構築する** ことで A1〜C6 精度を最大化、
-//! C8 は ignore 継続。`KarplusStrong` の補間 field は `thiran: ThiranCoeffs` 単一型に
-//! 解消し、enum dispatch のオーバーヘッドを除去した。`LagrangeCoeffs` は将来的な
-//! Phase 4 再評価のために crate-level に残置。
+//! `KarplusStrong` は `ThiranCoeffs` (1 次 allpass) を採用。`LagrangeCoeffs` は
+//! 将来の再評価用に残置。
 
 /// Lagrange 3 次補間係数。fractional 部 d ∈ [0, 1) に対する 4 つの重み。
-///
-/// Phase 3 D36 案 D 採用後は KarplusStrong の補間からは外れたが、`LagrangeCoeffs`
-/// の API (`new(d)` / `set_fractional(d)` / `apply(...)` / `Default`) は Phase 4 以降の
-/// 再評価のために残置している。テストはバックアップとして維持。
 ///
 /// 4 サンプルの引数順は時間的に新しい → 古い:
 ///   x_minus   = x[n - D_int + 1] （最新側、h0 重み）
@@ -65,10 +50,6 @@ impl Default for LagrangeCoeffs {
 
 /// 1 次 Thiran allpass。`H(z) = (a₁ + z⁻¹)/(1 + a₁·z⁻¹)`、`a₁ = (1 - d)/(1 + d)`。
 /// `|H(ω)| = 1` を厳密に保つため、Lagrange 4 点 FIR の高域減衰がない。
-///
-/// 状態 `z1_in` / `z1_out` を保持する IIR。d=0 は a₁=1.0 で極が単位円上 z=-1 に
-/// 乗る境界ケースのため、`set_fractional` で `d ∈ [1e-4, 0.999]` に clamp する
-/// (R25 / D36)。d=1e-4 → a₁ ≈ 0.9998、d=0.999 → a₁ ≈ 5e-4、いずれも極が単位円内。
 #[derive(Debug, Clone, Copy)]
 pub struct ThiranCoeffs {
     pub a1: f32,
@@ -85,7 +66,8 @@ impl ThiranCoeffs {
         }
     }
 
-    /// note_on / Pitch Bend で length 再分解時に呼ぶ。d は [1e-4, 0.999] へ clamp。
+    /// d=0 は a₁=1.0 で極が単位円上 z=-1 に乗る境界ケースのため、`[1e-4, 0.999]` に clamp。
+    /// d=1e-4 → a₁ ≈ 0.9998、d=0.999 → a₁ ≈ 5e-4、いずれも極が単位円内で安定。
     pub fn set_fractional(&mut self, d: f32) {
         let d_safe = d.clamp(1e-4, 0.999);
         self.a1 = (1.0 - d_safe) / (1.0 + d_safe);

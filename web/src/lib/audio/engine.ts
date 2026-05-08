@@ -21,8 +21,6 @@ export class SynthEngine {
 	private pendingParams = new Map<number, number>();
 	private rafHandle: number | null = null;
 
-	private _lastPitchBend = 0;
-
 	private _readyHandlers: ReadyHandlers | null = null;
 
 	async start(): Promise<void> {
@@ -79,11 +77,7 @@ export class SynthEngine {
 				const data = e.data;
 				if (data.type === 'voiceState') {
 					voiceState.activeMask = data.activeMask;
-					// postMessage で structured clone された Float32Array は ArrayBufferLike base
-					// なので、Float32Array<ArrayBuffer> 型に再ラップしてから代入する。
-					const amps = new Float32Array(data.amplitudes.length);
-					amps.set(data.amplitudes);
-					voiceState.amplitudes = amps;
+					voiceState.amplitudes = data.amplitudes;
 					return;
 				}
 				const h = this._readyHandlers;
@@ -156,22 +150,14 @@ export class SynthEngine {
 		this.post({ type: 'setMode', mode });
 	}
 
-	/**
-	 * Phase 3 D38: MIDI CC (CC#7 / #64 / #123)。`value` は 0..127、ここで 0..1 に正規化。
-	 */
 	sendMidiCc(cc: number, value: number): void {
 		if (!this.ready) return;
 		const normalized = Math.max(0, Math.min(1, value / 127));
 		this.post({ type: 'midiCC', cc, value: normalized });
 	}
 
-	/**
-	 * Phase 3 D39: Pitch Bend (±2 半音)。連続値で flooding しないため前値一致で skip (R28)。
-	 */
 	sendPitchBend(semitones: number): void {
 		if (!this.ready) return;
-		if (semitones === this._lastPitchBend) return;
-		this._lastPitchBend = semitones;
 		this.post({ type: 'pitchBend', semitones });
 	}
 
