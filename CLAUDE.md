@@ -17,12 +17,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/specs/<date>-<seq>-<name>/` | イテレーション単位の仕様書群（pre-research + 01〜07）。実装着手前に通読 |
 | `docs/retrospective/<iteration-name>.md` | 各イテレーション完了時の振り返り。次フェーズへの引き継ぎ事項を含む |
 
-現在のイテレーション: `docs/specs/2026-05-08-004-phase4a/`（Phase 4a / F38b 計測 + LFO + Mod Wheel + Preset + 多楽器 6 種 / 仕様書策定中、実装は新セッションで `IMPLEMENTATION_PROMPT.md` を起点に進める）。Phase 4b は別計画扱い（ピアノ音色 / Stretching all-pass）。詳細は `docs/retrospective/2026-05-07-003-phase3.md`。
+現在のイテレーション: **次は Phase 4b（ピアノ音色 / Stretching all-pass + impact model）**。仕様書ディレクトリは `docs/specs/<YYYY-MM-DD>-005-phase4b/` で別計画として策定する。Phase 4a 実装完了後、retrospective を経てから着手。
 
 完了済みイテレーション:
 - `docs/specs/2026-05-06-001-mvp/` (Phase 1 / MVP) — 単音 Karplus-Strong、整数ディレイ、A1=55Hz で 2.3% 偏移
 - `docs/specs/2026-05-07-002-phase2/` (Phase 2 / polyphony) — 8 音 polyphony、Lagrange 補間、ParamDescriptor 生成、hold note stack
 - `docs/specs/2026-05-07-003-phase3/` (Phase 3) — Modal Body / loss filter / pick position / Thiran allpass (D36 案 D 採用) / Brightness 補正 / soft clip / Pitch Bend / Sustain / VoiceMeter UI
+- `docs/specs/2026-05-08-004-phase4a/` (Phase 4a) — wasm-opt -O3 / `excitation_snapshot` cfg(test) / 多楽器 6 種 (Default + Guitar Classical / Ukulele / Mandolin / Bass / Guitar Steel / Sitar) / グローバル LFO (Sine + Triangle, 0.1〜8 Hz) / Mod Wheel (CC#1) master / LFO destinations Pitch/Brightness/Volume / プリセット保存 (localStorage v1, 最大 32) / Factory Preset 7 種 / 18 C ABI 関数 + memory export = 19 required exports
 
 新イテレーションの振り返りを作る場合は `/retrospective <iteration-name>` カスタムコマンド（`.claude/commands/retrospective.md`）。
 

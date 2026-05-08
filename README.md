@@ -1,6 +1,6 @@
 # physics-base-synth
 
-物理ベース・シンセサイザー（Karplus–Strong）の Phase 3 (Body Resonator + Extended KS + MIDI CC + Voice Meter UI + Soft clip + Thiran allpass) 対応版。Rust + WebAssembly + Svelte 5 (SvelteKit) で実装。
+物理ベース・シンセサイザー（Karplus–Strong）の Phase 4a (Phase 3 + LFO + Mod Wheel + Preset + 多楽器 6 種 + wasm-opt -O3) 対応版。Rust + WebAssembly + Svelte 5 (SvelteKit) で実装。
 
 ## 動作環境
 
@@ -44,29 +44,32 @@ pnpm dev
 | `pnpm lint` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `pnpm fmt` | `cargo fmt` + prettier |
 
-## アーキテクチャ概要 (Phase 3)
+## アーキテクチャ概要 (Phase 4a)
 
 ```
 Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
-   VoiceMeter / PolyphonyToggle             │ FFI (C ABI、wasm-bindgen 不使用)
-   PickPosition / BodyWet スライダー         ▼
-   WebMIDI CC handler (CC#7/#64/#123)   wasm-audio (cdylib)
-   Pitch Bend                                │ + synth_midi_cc / synth_pitch_bend
-                                             │ + synth_voice_state_ptr
+   PresetSelector / ModWheel                │ FFI (C ABI、wasm-bindgen 不使用)
+   LfoSection (rate/waveform/3 depth)        ▼
+   VoiceMeter / PolyphonyToggle          wasm-audio (cdylib)
+   PickPosition / BodyWet スライダー       18 関数 + memory export
+   WebMIDI CC handler (CC#1/7/64/123)        + synth_apply_instrument
+   Pitch Bend                                + synth_lfo_set_rate / waveform / depth
                                              ▼
                                         dsp-core (rlib)
-                                        Engine / VoicePool<8> / KarplusStrong (Thiran allpass)
-                                        ModalBodyResonator (M=8 並列 bandpass、stereo)
-                                        LossFilter (one-zero) / SoftClip (区間関数型)
-                                        SustainState / Pitch Bend / Voice State buffer
-                                        FractionalDelay (Thiran) / NoteAllocator / HoldStack
+                                        Engine + Lfo + mod_wheel + lfo_*_depth
+                                        VoicePool<8> / KarplusStrong (Thiran allpass)
+                                        ModalBodyResonator (M=8、楽器 7 種切替)
+                                        LossFilter / SoftClip / SustainState / HoldStack
+                                        FractionalDelay (Thiran) / NoteAllocator
                                         SmoothedValue / XorShift32 / ParamDescriptor (生成)
+                                        InstrumentKind enum + body_modes_for_instrument
 ```
 
 詳細は仕様書 (`docs/specs/`) を参照:
 - Phase 1 (MVP): `docs/specs/2026-05-06-001-mvp/`
 - Phase 2 (polyphony / fractional delay / ParamDescriptor): `docs/specs/2026-05-07-002-phase2/`
 - Phase 3 (Body Resonator / Extended KS / MIDI CC / Voice Meter): `docs/specs/2026-05-07-003-phase3/`
+- Phase 4a (LFO / Mod Wheel / Preset / 多楽器 6 種 / wasm-opt -O3): `docs/specs/2026-05-08-004-phase4a/`
 
 ## Phase 3 で追加された機能
 
@@ -116,7 +119,7 @@ Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
 
 ### dsp-core ユニットテスト一覧
 
-`cargo test -p dsp-core` で **94 件パス + 1 件 ignored**:
+`cargo test -p dsp-core` で **120 件パス + 1 件 ignored** (Phase 3 既存 93 + Phase 4a 新規 27):
 
 - Phase 1 既存 + Phase 2 拡張 (40 件): silence_when_inactive / energy_rises_after_note_on / decay_with_low_damping / length_matches_freq / no_allocation_in_process / paramid_roundtrip / damping_preserved_across_note_on / engine_processes_block_without_panic / midi_to_freq_a4 / poly_mode_independent_voices / setparam_clamps_out_of_range / note_on_first_block_nonzero / hold_stack 系 / voice_pool 系 / note_allocator 系
 - fractional_delay (10 件): Lagrange 4 件 + set_fractional + Thiran 関連 6 件
@@ -126,15 +129,23 @@ Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
 - soft_clip (6 件)
 - pitch_bend (4 件)
 - sustain (6 件)
-- midi_cc (9 件)
+- midi_cc (11 件: Phase 3 9 件 + Phase 4a Mod Wheel 2 件)
 - pitch_accuracy (5 PASS, 1 IGNORED): A1/A2/A4/C6 + long_term_stability + (`#[ignore]` C8、damping<1 で物理限界)
+- **Phase 4a 新規**:
+  - lfo (8 件): sine/triangle range / zero_at_init / period / rate_smoothing / waveform_switch / no_alloc / phase_wrap
+  - lfo_destinations (6 件): test_mod_wheel_zero_disables_lfo (Phase 3 互換最重要) / one_full_lfo / Pitch/Brightness/Volume modulation / no_alloc
+  - instrument (7 件): changes_modal_coeffs / releases_voices / clears_sustain / resets_modal_state / no_alloc / stereo_spread_per_instrument / default_matches_phase3
+  - modal_body Phase 4a 拡張 (3 件): set_instrument_changes_coeffs / clears_state / default_matches_phase3
+  - karplus_strong excitation_tests (4 件): pick_min_beta / node_at_beta_half / attenuates_kth_harmonic / k_zero_branch (Phase 3 既存 4 件を unit test mod へ移動)
+  - no_alloc (1 件): test_no_allocation_with_lfo_and_instrument (LFO + 楽器切替時の capacity 不変)
+  - dsp_core (release ビルドのみ): test_engine_process_block_timing_phase4a (8 voice + LFO + Mod Wheel + Pitch Bend + CC#7 で < 1.7 ms)
 
 ## クレート構成
 
 | クレート | 種類 | 役割 |
 |---|---|---|
 | `crates/dsp-core` | rlib（純粋 Rust、依存ゼロ） | Engine / VoicePool / KarplusStrong (Thiran 単一型) / ModalBodyResonator / LossFilter / SoftClip / SustainState / NoteAllocator / HoldStack / SmoothedValue / XorShift32 / ParamDescriptor (生成) |
-| `crates/wasm-audio` | cdylib（C ABI、wasm-bindgen 不使用） | `synth_*` 15 関数を `#[unsafe(no_mangle)] extern "C"` で公開（Phase 2 の 12 関数 + Phase 3 の midi_cc / pitch_bend / voice_state_ptr） |
+| `crates/wasm-audio` | cdylib（C ABI、wasm-bindgen 不使用） | `synth_*` 18 関数 + memory export = 19 required exports（Phase 2 の 12 関数 + Phase 3 の midi_cc / pitch_bend / voice_state_ptr + Phase 4a の apply_instrument / lfo_set_rate / lfo_set_waveform / lfo_set_depth） |
 | `web` | SvelteKit + adapter-static | UI / AudioWorklet / Web MIDI / VoiceMeter / PolyphonyToggle |
 
 ## Phase 3 で解消された Phase 2 の課題
@@ -145,17 +156,46 @@ Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
 - ✅ **mono/poly トグル UI 正式化** (Phase 2 では dev-only)
 - ✅ **Voice Meter UI** (Phase 2 では internal API のみ)
 
-## Phase 4 への申し送り
+## Phase 4a で追加された機能
 
-- C8 ピッチ自己発振: damping=1.0 自己発振モード or FFT-based estimator で再評価
-- Mod Wheel (CC#1) + LFO の仕様確定 (rate / 波形 / 配分 / 深さ)
-- プリセット保存・ロード (Modal 係数 + 全パラメータの localStorage / IndexedDB)
-- 多楽器プリセット (クラシックギター / ウクレレ / マンドリン / ベース)
-- Stretching all-pass + impact model でピアノ音色
+- **wasm-opt -O3 統合 (D45)**: `scripts/copy-wasm.mjs` に Binaryen 製 wasm-opt を組み込み。release ビルドで `--strip-debug` + 全最適化 pass。WASM gzip 27.78 → 18.42 KB に圧縮。
+- **`excitation_snapshot` cfg(test) 化 (D45)**: production binary から完全除外、関連 test を unit test mod に移動して件数保持。
+- **多楽器プリセット 6 種 (D52/D54)**: Default + Guitar Classical / Ukulele / Mandolin / Bass / Guitar Steel / Sitar。各楽器に固有の `BODY_MODES_<INSTRUMENT>_L/R` 8 mode + `STEREO_SPREAD_<INSTRUMENT>`。Default kind の係数は Phase 3 既存値の完全 alias で後方互換を保証。
+- **グローバル LFO (D46/D47/D48)**: Engine 内 1 個。波形 Sine / Triangle、レンジ 0.1〜8.0 Hz、SmoothedValue tau=0.05s で rate 平滑化。Pitch / Brightness / Volume の 3 destinations を独立 depth で制御。Engine 側で `pitch_factor = exp2(...)` を 1 回計算して全 voice に fan-out (per voice exp2 を回避、+15 演算/sample)。
+- **Mod Wheel (CC#1, D49)**: `Engine::handle_midi_cc` の CC#1 分岐を有効化。`mod_wheel: SmoothedValue (tau=0.05s)` を全 LFO destination depth の master 乗数として保持。**Mod Wheel = 0 で LFO 効果ゼロ → Phase 3 互換動作と完全一致** (`test_mod_wheel_zero_disables_lfo` で機械保証)。
+- **`Engine::apply_instrument(kind)` (D52/D53)**: 楽器切替で `pool.all_notes_off()` → `hold_stack.clear()` → `sustain_state.reset()` → `current_instrument` 更新 → `modal_body.set_instrument(kind, sample_rate)`。即時 release (fade-out なし)、UI で「楽器を切り替えると現在の音は止まります」を告知。
+- **C ABI 4 関数追加**: `synth_apply_instrument` / `synth_lfo_set_rate` / `synth_lfo_set_waveform` / `synth_lfo_set_depth`。Phase 3 既存 14 関数 + memory export = 15 → Phase 4a で **18 関数 + memory = 19 required exports**。
+- **プリセット保存・ロード (D50/D51)**: localStorage v1 schema (`physbase.preset.v1.*`)、Factory Preset 7 種 + User Preset 最大 32 件。`isValidPresetV1` で schema レベル一括バリデーション (型 / 値域 / NaN / Infinity / 空名 / name.length > 64 / 未知 enum)、Factory 名衝突 / User 上限は store-specific で別途チェック。
+- **PresetSelector / ModWheel / LfoSection UI**: `optgroup` で Factory / User を分離、Save / Delete ボタン (Factory 削除 disabled)、`onMount` で last preset 復元。
+
+### Phase 4a 検証項目 (F38b + F39〜F47)
+
+| ID | 手順 | 期待結果 |
+|---|---|---|
+| **F38b** | Phase 3 持ち越し: `pnpm preview` → Chrome DevTools Performance タブで Worklet `process` Self time avg/max を計測 | avg < 1.5 ms / max < 2.5 ms (Phase 3 完成判定)、再計測で avg < 1.7 ms / max < 2.7 ms |
+| **F39** | `pnpm build` 後 `gzip -kc web/build/_app/immutable/assets/wasm_audio.*.wasm \| wc -c` | gzip 目標 < 15 KB / 警戒 < 18 KB / 撤退 < 30 KB (実測 18.42 KB、警戒微超過) |
+| **F40** | `cargo test -p dsp-core test_lfo_` + 実機操作 | LFO Sine/Triangle 範囲 / 5Hz 周期 / rate 平滑 / phase wrap、実機で vibrato/tremolo/wah 確認 |
+| **F41** | `cargo test -p dsp-core test_midi_cc_mod_wheel_` + 実機操作 | CC#1 で mod_wheel.target() 更新 / 0..1 clamp、WebMIDI 物理 wheel と UI スライダー同期 |
+| **F42** | `pnpm --filter ./web check` + 実機操作 | isValidPresetV1 が schema 違反を一括 reject、Save / Delete / リロードで User Preset が残る、32 件超過で errorMessage |
+| **F43** | `cargo test -p dsp-core test_apply_instrument_` + 実機操作 | apply_instrument で modal coeffs 変化 / 全 voice release / sustain pending=0、6 種で音色切替 |
+| **F44** | `cargo build --target wasm32-unknown-unknown --release` で `excitation_snapshot` シンボル除外 | production binary で関数除外、cargo test 件数保持 |
+| **F45** | `cargo test -p dsp-core test_no_allocation_with_lfo_and_instrument` | 8 voice + LFO + Mod Wheel + 楽器切替で voice buffer / LFO 状態 capacity 不変 |
+| **F46** | `cargo test --release -p dsp-core test_engine_process_block_timing_phase4a -- --nocapture` | 平均 < 1.7 ms (実測 0.023 ms、74× 余裕) |
+| **F47** | Phase 3 既存 93 件 + 1 IGNORED 維持 + Default プリセット + Mod Wheel = 0 で Phase 3 と同じ音 | regression なし |
+
+## Phase 4b への申し送り (別計画扱い)
+
+- **ピアノ音色** (Stretching all-pass for inharmonicity B≈10⁻³ + impact model) — Phase 4b 主目的
+- C8 ピッチ自己発振: damping=1.0 自己発振モード or FFT-based estimator
 - Pick position の fractional 化 + 連続変更
 - Look-ahead limiter (5 ms 遅延型、soft clip より透明)
-- WASM SIMD (`target-feature=+simd128`)
-- F38b 実機計測 (Chrome DevTools Performance タブ): Worklet process 時間の検証
+- WASM SIMD (`target-feature=+simd128`) — Safari/Firefox 対応再評価
+- LFO 波形拡張 (S&H / Square / Sawtooth)
+- LFO destinations 拡張 (Pick / Damping / BodyWet)
+- 楽器切替の fade-out (即時 release ではなく短時間 fade)
+- Cross-tab preset 同期 (`storage` event)
+- Preset JSON ファイル import / export
+- Mono + Sustain の本実装
 
 ## ライセンス
 
