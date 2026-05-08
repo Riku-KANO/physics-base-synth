@@ -1,6 +1,8 @@
 // AUTO-GENERATED FROM params.json — DO NOT EDIT
 // Run `pnpm gen:params` to regenerate.
 
+#![allow(clippy::approx_constant)]
+
 #[derive(Debug, Clone, Copy)]
 pub struct ParamDescriptor {
     pub id: u32,
@@ -349,7 +351,10 @@ pub fn body_modes_for_instrument(
 ) -> (&'static [BodyMode; 8], &'static [BodyMode; 8]) {
     match kind {
         InstrumentKind::Default => (&BODY_MODES_DEFAULT_L, &BODY_MODES_DEFAULT_R),
-        InstrumentKind::GuitarClassical => (&BODY_MODES_GUITAR_CLASSICAL_L, &BODY_MODES_GUITAR_CLASSICAL_R),
+        InstrumentKind::GuitarClassical => (
+            &BODY_MODES_GUITAR_CLASSICAL_L,
+            &BODY_MODES_GUITAR_CLASSICAL_R,
+        ),
         InstrumentKind::Ukulele => (&BODY_MODES_UKULELE_L, &BODY_MODES_UKULELE_R),
         InstrumentKind::Mandolin => (&BODY_MODES_MANDOLIN_L, &BODY_MODES_MANDOLIN_R),
         InstrumentKind::Bass => (&BODY_MODES_BASS_L, &BODY_MODES_BASS_R),

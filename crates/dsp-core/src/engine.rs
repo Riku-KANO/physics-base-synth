@@ -1,6 +1,10 @@
 use crate::hold_stack::HoldStack;
+use crate::lfo::{Lfo, LfoDestination, LfoWaveform};
 use crate::modal_body::ModalBodyResonator;
-use crate::params::{ParamId, BODY_WET_DEFAULT, OUTPUT_GAIN_DEFAULT, PICK_POSITION_DEFAULT};
+use crate::params::{
+    InstrumentKind, ParamId, BODY_WET_DEFAULT, OUTPUT_GAIN_DEFAULT, PICK_POSITION_DEFAULT,
+    STEREO_SPREAD_DEFAULT,
+};
 use crate::smoothing::SmoothedValue;
 use crate::soft_clip::soft_clip;
 use crate::sustain_state::SustainState;
@@ -10,6 +14,15 @@ use crate::voice_pool::{VoicePool, POLYPHONY};
 /// CC#7 Channel Volume のデフォルト (OutputGain と直交)
 const CHANNEL_VOLUME_DEFAULT: f32 = 1.0;
 const CHANNEL_VOLUME_TAU: f32 = 0.02;
+
+/// Phase 4a D49: Mod Wheel (CC#1) のデフォルトと SmoothedValue 時定数。
+/// デフォルト 0.0 = LFO 効果ゼロ (Phase 3 互換挙動)。
+const MOD_WHEEL_DEFAULT: f32 = 0.0;
+const MOD_WHEEL_TAU: f32 = 0.05;
+
+/// Phase 4a D48: LFO destination depth のデフォルトと SmoothedValue 時定数。
+const LFO_DEPTH_DEFAULT: f32 = 0.0;
+const LFO_DEPTH_TAU: f32 = 0.05;
 
 const CC_MOD_WHEEL: u8 = 1;
 const CC_CHANNEL_VOLUME: u8 = 7;
@@ -53,6 +66,21 @@ pub struct Engine {
     voice_state_buffer: [u8; 33],
     /// 最後に voice_state_buffer を書き込んでからの経過 sample 数
     voice_state_sample_counter: u32,
+
+    /// Phase 4a D46: グローバル LFO 1 個
+    lfo: Lfo,
+    /// Phase 4a D49: Mod Wheel (CC#1) を SmoothedValue で保持。LFO depth の master 乗数。
+    mod_wheel: SmoothedValue,
+    /// Phase 4a D48: LFO Pitch destination 深さ ∈ [0, 1]
+    lfo_pitch_depth: SmoothedValue,
+    /// Phase 4a D48: LFO Brightness destination 深さ ∈ [0, 1]
+    lfo_brightness_depth: SmoothedValue,
+    /// Phase 4a D48: LFO Volume destination 深さ ∈ [0, 1]
+    lfo_volume_depth: SmoothedValue,
+    /// Phase 4a D52: 現在の楽器選択 (kind=0 Default で Phase 3 既存値の互換性を維持)
+    current_instrument: InstrumentKind,
+    /// Phase 4a D54: 楽器ごとの stereo_spread を反映する保持値。`Engine::stereo_spread()` の参照値。
+    stereo_spread: f32,
 }
 
 impl Engine {
@@ -71,6 +99,13 @@ impl Engine {
             sustain_state: SustainState::new(),
             voice_state_buffer: [0u8; 33],
             voice_state_sample_counter: 0,
+            lfo: Lfo::new(),
+            mod_wheel: SmoothedValue::new(MOD_WHEEL_DEFAULT),
+            lfo_pitch_depth: SmoothedValue::new(LFO_DEPTH_DEFAULT),
+            lfo_brightness_depth: SmoothedValue::new(LFO_DEPTH_DEFAULT),
+            lfo_volume_depth: SmoothedValue::new(LFO_DEPTH_DEFAULT),
+            current_instrument: InstrumentKind::Default,
+            stereo_spread: STEREO_SPREAD_DEFAULT,
         }
     }
 
@@ -259,6 +294,69 @@ impl Engine {
         self.voice_state_buffer.as_ptr()
     }
 
+    /// Phase 4a D46: LFO レート設定 (0.1〜8.0 Hz、SmoothedValue tau=0.05s で平滑化)。
+    pub fn lfo_set_rate(&mut self, hz: f32) {
+        self.lfo.set_rate(hz);
+    }
+
+    /// Phase 4a D47: LFO 波形設定 (Sine / Triangle)。
+    pub fn lfo_set_waveform(&mut self, kind: LfoWaveform) {
+        self.lfo.set_waveform(kind);
+    }
+
+    /// Phase 4a D48: LFO destination depth 設定。
+    /// 値域 [0, 1] に clamp。
+    pub fn lfo_set_depth(&mut self, dest: LfoDestination, depth: f32) {
+        let v = depth.clamp(0.0, 1.0);
+        match dest {
+            LfoDestination::Pitch => self.lfo_pitch_depth.set_target(v),
+            LfoDestination::Brightness => self.lfo_brightness_depth.set_target(v),
+            LfoDestination::Volume => self.lfo_volume_depth.set_target(v),
+        }
+    }
+
+    /// Phase 4a D52: 現在の楽器選択を返す（Step 9 で apply_instrument 実装）。
+    #[doc(hidden)]
+    pub fn current_instrument(&self) -> InstrumentKind {
+        self.current_instrument
+    }
+
+    /// Phase 4a D54: 楽器ごとの stereo_spread を返す。
+    #[doc(hidden)]
+    pub fn stereo_spread(&self) -> f32 {
+        self.stereo_spread
+    }
+
+    /// Phase 4a D46: LFO への read-only access (テスト用)。
+    #[doc(hidden)]
+    pub fn lfo(&self) -> &Lfo {
+        &self.lfo
+    }
+
+    /// Phase 4a D49: Mod Wheel target 値 (テスト用)。
+    #[doc(hidden)]
+    pub fn mod_wheel_target(&self) -> f32 {
+        self.mod_wheel.target()
+    }
+
+    /// Phase 4a D48: LFO Pitch depth target 値 (テスト用)。
+    #[doc(hidden)]
+    pub fn lfo_pitch_depth_target(&self) -> f32 {
+        self.lfo_pitch_depth.target()
+    }
+
+    /// Phase 4a D48: LFO Brightness depth target 値 (テスト用)。
+    #[doc(hidden)]
+    pub fn lfo_brightness_depth_target(&self) -> f32 {
+        self.lfo_brightness_depth.target()
+    }
+
+    /// Phase 4a D48: LFO Volume depth target 値 (テスト用)。
+    #[doc(hidden)]
+    pub fn lfo_volume_depth_target(&self) -> f32 {
+        self.lfo_volume_depth.target()
+    }
+
     /// Phase 3 D41: Voice State buffer に active mask + 振幅をパック。
     fn write_voice_state(&mut self) {
         let mut mask = 0u8;
@@ -295,6 +393,16 @@ impl AudioProcessor for Engine {
             .set_time_constant(sample_rate, CHANNEL_VOLUME_TAU);
         self.modal_body.prepare(sample_rate);
         self.pool.set_damping(self.current_damping);
+
+        // Phase 4a D46 / D48 / D49: LFO + Mod Wheel + LFO depth の SmoothedValue を初期化
+        self.lfo.prepare(sample_rate);
+        self.mod_wheel.set_time_constant(sample_rate, MOD_WHEEL_TAU);
+        self.lfo_pitch_depth
+            .set_time_constant(sample_rate, LFO_DEPTH_TAU);
+        self.lfo_brightness_depth
+            .set_time_constant(sample_rate, LFO_DEPTH_TAU);
+        self.lfo_volume_depth
+            .set_time_constant(sample_rate, LFO_DEPTH_TAU);
     }
 
     fn process(&mut self, output_l: &mut [f32], output_r: &mut [f32]) {
@@ -332,6 +440,17 @@ impl AudioProcessor for Engine {
         self.hold_stack.clear();
         self.voice_state_buffer = [0u8; 33];
         self.voice_state_sample_counter = 0;
+
+        // Phase 4a: LFO / Mod Wheel / LFO depth / 楽器選択を初期状態へ
+        self.lfo.reset();
+        self.mod_wheel.set_immediate(MOD_WHEEL_DEFAULT);
+        self.lfo_pitch_depth.set_immediate(LFO_DEPTH_DEFAULT);
+        self.lfo_brightness_depth.set_immediate(LFO_DEPTH_DEFAULT);
+        self.lfo_volume_depth.set_immediate(LFO_DEPTH_DEFAULT);
+        self.current_instrument = InstrumentKind::Default;
+        self.stereo_spread = STEREO_SPREAD_DEFAULT;
+        // 注: modal_body の楽器係数差し替えは Step 8 で `modal_body.set_instrument` 経由で実装。
+        // Phase 3 互換のため、Step 5 時点では `modal_body.reset()` (上で実行済) のみで足りる。
     }
 }
 

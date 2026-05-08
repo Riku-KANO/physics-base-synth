@@ -147,6 +147,10 @@ export function generateRustSource(paramsJson) {
 	lines.push('// AUTO-GENERATED FROM params.json — DO NOT EDIT');
 	lines.push('// Run `pnpm gen:params` to regenerate.');
 	lines.push('');
+	// Phase 4a: 楽器係数 (Modal gain など) が偶然 π / 1/π / 1/√2 等の数学定数に
+	// 近い値になることがあるため、approx_constant の clippy lint を抑止する。
+	lines.push('#![allow(clippy::approx_constant)]');
+	lines.push('');
 	lines.push('#[derive(Debug, Clone, Copy)]');
 	lines.push('pub struct ParamDescriptor {');
 	lines.push('    pub id: u32,');

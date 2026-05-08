@@ -114,7 +114,8 @@ impl Lfo {
     }
 
     /// 現在 phase に対応する [-1, 1] の LFO 値を返してから 1 サンプル分 phase を進める。
-    /// Sine: `f32::sin(2π · phase)`、Triangle: `4·|phase − 0.5| − 1`。
+    /// Sine: `f32::sin(2π · phase)`、Triangle: `1 − 4·|phase − 0.5|`
+    /// (phase=0 で -1、phase=0.5 で +1、phase=1 で -1 に戻る対称三角波)。
     /// **重要**: 値計算 → phase 進行の順にすることで、`new()` 直後の初回呼出は
     /// phase=0 での値（sine=0、triangle=-1）を返す（test 仕様の単純化）。
     #[inline(always)]
@@ -128,7 +129,7 @@ impl Lfo {
             LfoWaveform::Triangle => {
                 // [-1, 1] の対称三角波。phase=0 で -1、phase=0.5 で 1、phase=1 で -1 へ戻る。
                 let centered = self.phase - 0.5;
-                4.0 * centered.abs() - 1.0
+                1.0 - 4.0 * centered.abs()
             }
         };
         // 2. 次サンプル用に phase を進める
@@ -171,7 +172,7 @@ impl Default for Lfo {
 | `test_lfo_zero_at_init` | `process_sample` 初回呼出で sine = 0、triangle = -1 (phase=0、値計算 → phase 進行 の順による厳密性、値計算 → 進行の実装で `assert_eq!` 可能) |
 | `test_lfo_period_matches_rate` | rate=5Hz、48000/5 = 9600 sample 後に phase が 1 周期完了 (phase wrap) |
 | `test_lfo_rate_smoothing` | rate を 1Hz → 8Hz に変更後、`rate_target() == 8.0` は即時、一次平滑の `current` は tau=0.05s に従い ① 1 tau (50ms) 時点で `1 + 7·(1 − e⁻¹) ≈ 5.42 Hz` 近傍（誤差 ±0.2 Hz）、② 5 tau (250ms) 時点で 7.95 Hz 以上の指数応答期待値を満たす（即時到達 assertion は不可、tau の物理意味に従う） |
-| `test_lfo_waveform_switch_no_click` | sine → triangle 切替時に出力連続性を簡易確認（switch 直後の値と 1 sample 前の値の差 < 0.5） |
+| `test_lfo_waveform_switch_no_click` | sine → triangle 切替で phase が reset されないこと（phase 不変）+ 切替後の値が有限 / [-1, 1] 範囲を確認。同一 phase での sine と triangle の絶対値差は最大 ~1.2 ありうるため、瞬間値の連続性は assert しない |
 | `test_lfo_no_alloc_in_process` | 1000 サンプル処理で `process_sample` のヒープ確保ゼロ（capacity 不変、Phase 3 D4 維持） |
 | `test_lfo_phase_wraps` | 10 秒走らせて phase が [0, 1) で wrap している（NaN / 無限大なし） |
 
