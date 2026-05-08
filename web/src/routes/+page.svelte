@@ -6,6 +6,10 @@
 	import ParamSlider from '$lib/components/ParamSlider.svelte';
 	import VoiceMeter from '$lib/components/VoiceMeter.svelte';
 	import PolyphonyToggle from '$lib/components/PolyphonyToggle.svelte';
+	// Phase 4a: Mod Wheel / LFO / Preset UI
+	import ModWheel from '$lib/components/ModWheel.svelte';
+	import LfoSection from '$lib/components/LfoSection.svelte';
+	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import { pcKeyboard } from '$lib/actions/pc-keyboard.svelte';
 	import { PARAM_IDS } from '$lib/audio/messages';
 	import { synth } from '$lib/state/synth.svelte';
@@ -47,6 +51,9 @@
 	<MidiSelect />
 	<button onclick={testNoteC4} disabled={!synth.ready}>Play C4 (test)</button>
 
+	<!-- Phase 4a: Preset セレクター -->
+	<PresetSelector />
+
 	<section class="params">
 		<ParamSlider
 			label="Damping"
@@ -78,7 +85,12 @@
 			step={0.01}
 			bind:value={synth.bodyWet}
 		/>
+		<!-- Phase 4a: Mod Wheel -->
+		<ModWheel />
 	</section>
+
+	<!-- Phase 4a: LFO Section -->
+	<LfoSection />
 
 	<Keyboard />
 	<small class="hint">PC keyboard: A S D F G H J K (white) / W E T Y U O (black)</small>
