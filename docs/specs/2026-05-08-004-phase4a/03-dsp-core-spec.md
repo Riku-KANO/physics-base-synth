@@ -790,7 +790,7 @@ Engine::process (per sample, n iterations):
 | `test_lfo_triangle_range` | triangle 波で min/max が ±1 |
 | `test_lfo_zero_at_init` | 初回 sample で sine = 0、triangle = -1 |
 | `test_lfo_period_matches_rate` | rate=5Hz、9600 sample 後に 1 周期完了 |
-| `test_lfo_rate_smoothing` | rate を 1Hz → 8Hz、tau=0.05s で 50ms 後に target 到達 |
+| `test_lfo_rate_smoothing` | rate を 1Hz → 8Hz に変更後、`rate_target() == 8.0` は即時、`current` は tau=0.05s に従い 1 tau (50ms) で 5.42 Hz 近傍 / 5 tau (250ms) で 7.95 Hz 以上の指数応答期待値（即時到達 assertion は不可） |
 | `test_lfo_no_alloc_in_process` | `process_sample` のヒープ確保ゼロ |
 
 ### `crates/dsp-core/tests/instrument_tests.rs` (新規、楽器切替)

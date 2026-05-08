@@ -219,8 +219,11 @@ export class SynthEngine {
   }
 
   // Phase 4a (D50): プリセット一括適用
+  // ready 前でも各 setter は currentParams / currentLfo / currentInstrument を更新する設計
+  // （個別 setter 側で state 保持後に ready チェック）。よって applyPreset 自体は early return しない。
+  // ready 後に start() が再送 (currentParams + resendPhase4aState) するため、起動前に
+  // applyPreset を呼ぶ経路 (onMount での last preset 復元等) も整合する。
   applyPreset(preset: PresetV1): void {
-    if (!this.ready) return;
     // 1. 楽器切替（全 voice release を伴うため最初）
     this.applyInstrument(preset.instrument);
 
@@ -815,15 +818,20 @@ if (import.meta.env.DEV) {
   import { onMount } from 'svelte';
   import { synth } from '$lib/state/synth.svelte';
   import { presetStore } from '$lib/state/preset-store.svelte';
-  import { getDefaultPreset } from '$lib/state/preset-schema';
+  import type { PresetV1 } from '$lib/state/preset-schema';
 
   let saveName = $state('');
 
   onMount(() => {
     presetStore.load();
-    // 起動時に最後に選択された Preset を復元 (UI state も同期)
+    // 起動時に最後に選択された Preset を復元 (UI state を無条件で同期)。
+    // onMount は通常 Start Audio 前に走り、engine.isReady() は false。
+    // engine.applyPreset は ready 前でも currentParams / currentLfo / currentInstrument
+    // を更新する設計のため、起動前から呼んで OK。Start Audio 後の start() 末尾で
+    // currentParams 再送 + resendPhase4aState() が走り、Worklet にも反映される。
     const lastPreset = presetStore.findByName(presetStore.currentPresetName);
-    if (lastPreset && synth.engine.isReady()) {
+    if (lastPreset) {
+      synth.engine.applyPreset(lastPreset);
       applyPresetToUiState(lastPreset);
     }
   });
