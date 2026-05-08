@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/specs/<date>-<seq>-<name>/` | イテレーション単位の仕様書群（pre-research + 01〜07）。実装着手前に通読 |
 | `docs/retrospective/<iteration-name>.md` | 各イテレーション完了時の振り返り。次フェーズへの引き継ぎ事項を含む |
 
-現在のイテレーション: `docs/specs/2026-05-07-003-phase3/`（Phase 3 / Body Resonator + Extended KS + MIDI CC + Voice Meter 完了）。次は Phase 4 候補（プリセット / 多楽器 / Mod Wheel + LFO / Stretching all-pass）。詳細は `docs/retrospective/2026-05-07-003-phase3.md`。
+現在のイテレーション: `docs/specs/2026-05-08-004-phase4a/`（Phase 4a / F38b 計測 + LFO + Mod Wheel + Preset + 多楽器 6 種 / 仕様書策定中、実装は新セッションで `IMPLEMENTATION_PROMPT.md` を起点に進める）。Phase 4b は別計画扱い（ピアノ音色 / Stretching all-pass）。詳細は `docs/retrospective/2026-05-07-003-phase3.md`。
 
 完了済みイテレーション:
 - `docs/specs/2026-05-06-001-mvp/` (Phase 1 / MVP) — 単音 Karplus-Strong、整数ディレイ、A1=55Hz で 2.3% 偏移
