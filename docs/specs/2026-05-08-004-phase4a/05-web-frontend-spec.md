@@ -479,20 +479,25 @@ class PresetStore {
    *  STORAGE_KEY_LIST 不在時 (User preset 未保存) でも STORAGE_KEY_LAST は読む
    *  (Factory preset だけを選択して保存しているケースに対応)。
    *  stale な lastName (削除済み User preset / 存在しない名前) は findByName で検証し、
-   *  なければ 'Default' に fallback。 */
+   *  なければ 'Default' に fallback。
+   *  load() が再実行されても古い userPresets が残らないよう、`loaded` を常に新規配列で
+   *  作り、最後に必ず `this.userPresets = loaded` で上書きする。 */
   load(): void {
+    // loaded を最初に作り、エラー経路でも空配列のまま userPresets を上書きできるようにする。
+    const loaded: PresetV1[] = [];
     try {
-      // 1. User preset リストの読み込み (LIST 不在は単に空 = Factory のみ利用シナリオ)
+      // 1. User preset リストの読み込み。
+      //    LIST 不在 / JSON parse 失敗 / 配列でない場合は loaded を空のまま継続
+      //    (Factory のみ利用シナリオや手動破壊への耐性)。
       const listJson = localStorage.getItem(STORAGE_KEY_LIST);
       if (listJson) {
-        let names: unknown;
+        let names: unknown = null;
         try {
           names = JSON.parse(listJson);
-        } catch {
-          names = null;
+        } catch (e) {
+          console.warn('[PresetStore] STORAGE_KEY_LIST JSON parse failed:', e);
         }
         if (Array.isArray(names)) {
-          const loaded: PresetV1[] = [];
           for (const name of names) {
             if (typeof name !== 'string') continue;
             const presetJson = localStorage.getItem(STORAGE_KEY_PREFIX + name);
@@ -508,9 +513,12 @@ class PresetStore {
               console.warn(`[PresetStore] Failed to parse preset ${name}:`, e);
             }
           }
-          this.userPresets = loaded;
+        } else {
+          console.warn('[PresetStore] STORAGE_KEY_LIST is not an array, ignoring');
         }
       }
+      // 必ず実行: 再 load() 時の stale state 防止 (LIST 不在 / 不正でも空で上書き)
+      this.userPresets = loaded;
 
       // 2. last preset 名の読み込み (LIST の有無に関係なく実行)。
       //    findByName で Factory + User の両方を確認、存在しなければ 'Default' に fallback。
@@ -521,6 +529,9 @@ class PresetStore {
     } catch (e) {
       console.error('[PresetStore] load failed:', e);
       this.errorMessage = 'Failed to load presets from storage';
+      // エラー時も userPresets を空にし、currentPresetName を Default に戻す。
+      this.userPresets = loaded; // ← loaded はこれまでに追加された分（または空）
+      this.currentPresetName = 'Default';
     }
   }
 

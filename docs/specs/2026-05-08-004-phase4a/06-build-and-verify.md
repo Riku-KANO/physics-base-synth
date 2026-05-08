@@ -119,7 +119,9 @@ gzip -kc web/build/_app/immutable/assets/wasm_audio.*.wasm | wc -c
 - プリセット名 "Test 1" で Save → リロード → User Preset として読み込める
 - 32 件保存後に 33 件目を試行 → `errorMessage` に "Preset slot full" 表示
 - localStorage の容量超過 (DevTools で localStorage を満杯にして試行) → `errorMessage` 表示
-- `physbase.preset.v1.list` を手動破壊（`localStorage.setItem('physbase.preset.v1.list', '{invalid')`）→ load() がエラーで User Preset 空に戻る、Factory は影響なし
+- `physbase.preset.v1.list` を手動破壊（`localStorage.setItem('physbase.preset.v1.list', '{invalid')`）→ User Preset は空扱い (`userPresets = []`)、Factory プリセット 7 種は影響なし、`STORAGE_KEY_LAST` が valid なら維持、stale なら `'Default'` fallback
+- `physbase.preset.v1.list` を削除 + `physbase.preset.v1.last = 'Sitar'` のみ残した状態でリロード → Factory の Sitar が `currentPresetName` に復元される（LIST 不在でも LAST が読まれる経路の確認）
+- `physbase.preset.v1.last = 'Deleted Preset Name'` のような stale 値でリロード → `currentPresetName === 'Default'` に fallback、`<select>` の value と option が一致して空白選択にならない
 - Factory プリセットは Delete ボタン disabled
 
 ### F43 — 楽器切替（D52 / D53 / D54）

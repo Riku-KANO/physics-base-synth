@@ -282,9 +282,15 @@ Phase 4a 実装着手前に以下を確認:
 - [ ] `web/src/lib/state/preset-store.svelte.ts` を新規作成（[`05-web-frontend-spec.md` §preset-store.svelte.ts](./05-web-frontend-spec.md#preset-storesveltets-phase-4a-新規)）
 - [ ] `PresetStore` クラス: `load` / `save` / `delete` / `apply` / `findByName` / `capturePreset` メソッド + `userPresets` / `currentPresetName` / `errorMessage` の `$state`
 - [ ] `MAX_USER_PRESETS = 32` 定数 export
+- [ ] `load()` の挙動を仕様通り実装:
+  - [ ] `STORAGE_KEY_LIST` 不在 / JSON parse 失敗 / 配列でない場合でも early return せず、`userPresets` は空配列に初期化したまま処理を継続
+  - [ ] `STORAGE_KEY_LIST` の有無に関係なく `STORAGE_KEY_LAST` を読み、`findByName(lastName)` で Factory + User の両方から存在確認
+  - [ ] stale な lastName（削除済み User preset / 古いデータ / 存在しない名前）は `'Default'` に fallback
+  - [ ] 個別 preset の `isValidPresetV1` バリデーション失敗は console.warn してスキップ（throw しない）
+- [ ] `save()` で値域 / Factory 名衝突 / name.length > 64 を reject する仕様 (F42-d/e/f)
 - [ ] `pnpm --filter ./web check` がパス
 - [ ] git commit `feat(web): preset-store + factory-presets + preset-schema 実装 (D50, D51)`
-- **検証**: F42-a / F42-b / F42-c (TypeScript レベル)
+- **検証**: F42-a / F42-b / F42-c / F42-d / F42-e / F42-f (TypeScript レベル) + load() 堅牢性 (LIST 不在 / stale lastName / 個別 preset 不正の各経路)
 
 #### Step 13. PresetSelector + ModWheel + LfoSection UI 実装（D46-D49 / D50 / D51 / D52）
 
