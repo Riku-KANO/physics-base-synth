@@ -33,7 +33,7 @@ web/src/lib/
 │   └── VoiceMeter.svelte               (Phase 3 同等、変更なし)
 ├── input/
 │   ├── midi.ts                         (Phase 3 同等、rawListener API 利用)
-│   └── midi-cc.ts                      (Phase 3 同等 + CC#1 → engine.sendMidiCc(1, value) 経路は既存通り)
+│   └── midi-cc.ts                      (Phase 4a で CC#1 受信時に synth.modWheel = value/127 を更新する経路追加、F41 用)
 ├── state/
 │   ├── factory-presets.ts              (Phase 4a 新規 — Factory Preset 7 種の const テーブル)
 │   ├── preset-schema.ts                (Phase 4a 新規 — PresetV1 interface + InstrumentKind type)
@@ -270,28 +270,54 @@ const VALID_INSTRUMENTS: InstrumentKindKey[] = [
 ];
 const VALID_WAVEFORMS: LfoWaveformKey[] = ['sine', 'triangle'];
 
-/** 受信した unknown オブジェクトが PresetV1 として valid か検証 */
+// 各 Param の値域 (params.json と同期、ParamDescriptor を import して使う場合あり)
+const PARAM_RANGES = {
+  damping: { min: 0.9, max: 0.9999 },
+  brightness: { min: 0.0, max: 1.0 },
+  outputGain: { min: 0.0, max: 1.5 },
+  pickPosition: { min: 0.05, max: 0.5 },
+  bodyWet: { min: 0.0, max: 1.0 },
+} as const;
+
+const LFO_RANGES = {
+  rate: { min: 0.1, max: 8.0 },
+  pitchDepth: { min: 0.0, max: 1.0 },
+  brightnessDepth: { min: 0.0, max: 1.0 },
+  volumeDepth: { min: 0.0, max: 1.0 },
+} as const;
+
+function isFiniteInRange(v: unknown, min: number, max: number): boolean {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+}
+
+/** 受信した unknown オブジェクトが PresetV1 として valid か検証 (型 + 有限性 + 値域) */
 export function isValidPresetV1(obj: unknown): obj is PresetV1 {
   if (!obj || typeof obj !== 'object') return false;
   const p = obj as Record<string, unknown>;
   if (p.version !== 1) return false;
-  if (typeof p.name !== 'string' || p.name.length === 0) return false;
+  if (typeof p.name !== 'string' || p.name.length === 0 || p.name.length > 64) return false;
   if (typeof p.createdAt !== 'string') return false;
   if (typeof p.instrument !== 'string') return false;
   if (!VALID_INSTRUMENTS.includes(p.instrument as InstrumentKindKey)) return false;
-  // params の内部構造検証
+
+  // params の内部構造 + 値域検証
   if (!p.params || typeof p.params !== 'object') return false;
   const pp = p.params as Record<string, unknown>;
-  if (typeof pp.damping !== 'number' || typeof pp.brightness !== 'number'
-      || typeof pp.outputGain !== 'number' || typeof pp.pickPosition !== 'number'
-      || typeof pp.bodyWet !== 'number') return false;
-  // lfo の内部構造検証
+  if (!isFiniteInRange(pp.damping, PARAM_RANGES.damping.min, PARAM_RANGES.damping.max)) return false;
+  if (!isFiniteInRange(pp.brightness, PARAM_RANGES.brightness.min, PARAM_RANGES.brightness.max)) return false;
+  if (!isFiniteInRange(pp.outputGain, PARAM_RANGES.outputGain.min, PARAM_RANGES.outputGain.max)) return false;
+  if (!isFiniteInRange(pp.pickPosition, PARAM_RANGES.pickPosition.min, PARAM_RANGES.pickPosition.max)) return false;
+  if (!isFiniteInRange(pp.bodyWet, PARAM_RANGES.bodyWet.min, PARAM_RANGES.bodyWet.max)) return false;
+
+  // lfo の内部構造 + 値域検証
   if (!p.lfo || typeof p.lfo !== 'object') return false;
   const pl = p.lfo as Record<string, unknown>;
-  if (typeof pl.rate !== 'number') return false;
+  if (!isFiniteInRange(pl.rate, LFO_RANGES.rate.min, LFO_RANGES.rate.max)) return false;
   if (typeof pl.waveform !== 'string' || !VALID_WAVEFORMS.includes(pl.waveform as LfoWaveformKey)) return false;
-  if (typeof pl.pitchDepth !== 'number' || typeof pl.brightnessDepth !== 'number'
-      || typeof pl.volumeDepth !== 'number') return false;
+  if (!isFiniteInRange(pl.pitchDepth, LFO_RANGES.pitchDepth.min, LFO_RANGES.pitchDepth.max)) return false;
+  if (!isFiniteInRange(pl.brightnessDepth, LFO_RANGES.brightnessDepth.min, LFO_RANGES.brightnessDepth.max)) return false;
+  if (!isFiniteInRange(pl.volumeDepth, LFO_RANGES.volumeDepth.min, LFO_RANGES.volumeDepth.max)) return false;
+
   return true;
 }
 
@@ -473,6 +499,12 @@ class PresetStore {
   save(preset: PresetV1): void {
     if (preset.name.length === 0) {
       this.errorMessage = 'Preset name cannot be empty';
+      return;
+    }
+    // Factory プリセット名との重複を拒否（findByName が Factory 優先のため、
+    // 同名 User を保存しても選択時に Factory が勝ち、削除も Factory 判定でブロックされる）
+    if (this.factoryPresets.some(p => p.name === preset.name)) {
+      this.errorMessage = `Cannot use factory preset name: ${preset.name}`;
       return;
     }
     const existingIdx = this.userPresets.findIndex(p => p.name === preset.name);
@@ -938,9 +970,58 @@ if (import.meta.env.DEV) {
 </main>
 ```
 
-## midi-cc.ts の Phase 4a 状況
+## midi-cc.ts の Phase 4a 変更点
 
-Phase 3 で実装済み、CC#1 → `engine.sendMidiCc(1, value)` の経路は既存通り動作。Phase 4a で **コード変更不要**（Engine 側で CC#1 分岐を有効化するだけ、JS 経路は不変）。
+Phase 3 で実装済みの CC#1 → `engine.sendMidiCc(1, value)` の経路は維持しつつ、**WebMIDI 物理 Mod Wheel と UI スライダーの同期** を実現するため、CC#1 受信時に `synth.modWheel` を更新する追加経路を入れる（F41 「物理 wheel を動かすと UI スライダーが追従」を満たすため）。
+
+**変更後のスケッチ**:
+```typescript
+// web/src/lib/input/midi-cc.ts (Phase 4a 拡張)
+import type { SynthEngine } from '$lib/audio/engine';
+import { synth } from '$lib/state/synth.svelte';
+
+const STATUS_MASK = 0xf0;
+const STATUS_CONTROL_CHANGE = 0xb0;
+const STATUS_PITCH_BEND = 0xe0;
+const PITCH_BEND_CENTER = 8192;
+const PITCH_BEND_RANGE_SEMITONES = 2;
+
+const CC_MOD_WHEEL = 1;  // Phase 4a 追加
+
+let lastPitchBend14: number | null = null;
+
+export function handleMidiMessage(data: Uint8Array, engine: SynthEngine): boolean {
+  if (data.length === 0) return false;
+  const cmd = data[0] & STATUS_MASK;
+  if (cmd === STATUS_CONTROL_CHANGE && data.length >= 3) {
+    const ccNum = data[1];
+    const ccValue = data[2];
+    engine.sendMidiCc(ccNum, ccValue);
+    // Phase 4a: 物理 Mod Wheel を UI スライダーと同期 (D49 / F41)
+    if (ccNum === CC_MOD_WHEEL) {
+      synth.modWheel = ccValue / 127;
+    }
+    return true;
+  }
+  // Phase 3 既存の Pitch Bend 経路は不変
+  if (cmd === STATUS_PITCH_BEND && data.length >= 3) {
+    const lsb = data[1] & 0x7f;
+    const msb = data[2] & 0x7f;
+    const combined14 = (msb << 7) | lsb;
+    if (combined14 === lastPitchBend14) return true;
+    lastPitchBend14 = combined14;
+    const normalized = (combined14 - PITCH_BEND_CENTER) / PITCH_BEND_CENTER;
+    engine.sendPitchBend(normalized * PITCH_BEND_RANGE_SEMITONES);
+    return true;
+  }
+  return false;
+}
+```
+
+**注意**:
+- `synth.modWheel` の更新は Engine 経由 (`engine.sendMidiCc`) と同時に行う。`engine.sendMidiCc` は MessagePort で Worklet に送るのみ、UI 状態は別更新が必要（Phase 3 までの ParamSlider / Pitch Bend は別経路）
+- 他 CC（CC#7 / CC#64 / CC#123）は UI 反映先がないため CC#1 のみ追加
+- ModWheel.svelte 内の `oninput` ハンドラから来る `engine.sendMidiCc(1, v)` も同経路で `synth.modWheel` を更新するが、`oninput` 内で直接 `synth.modWheel = v / 127` も更新するため二重更新になる。これは UI → Engine と MIDI → Engine の双方向経路を許容する設計上の意図的なもので、最終値が一致すれば問題なし
 
 ## ParamSlider.svelte の Phase 4a 状況
 

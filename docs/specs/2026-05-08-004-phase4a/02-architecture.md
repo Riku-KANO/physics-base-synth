@@ -44,7 +44,7 @@ Svelte UI (main thread) ──MessagePort──▶ AudioWorkletProcessor
 | 責務 | 配置 | 既存パターン参照 |
 |---|---|---|
 | **LFO message dispatch** | `synth-processor.ts` の `onMessage` switch に 4 ケース追加（`lfoSetRate` / `lfoSetWaveform` / `lfoSetDepth` / `applyInstrument`） | Phase 3 D38 で追加した `midiCC` / `pitchBend` の dispatch パターン |
-| **WasmExports interface 拡張** | `synth-processor.ts` 冒頭の `interface WasmExports` に 4 関数追加 | Phase 3 で 12 → 15 関数に拡張した既存パターン |
+| **WasmExports interface 拡張** | `synth-processor.ts` 冒頭の `interface WasmExports` に 4 関数追加 | Phase 3 で 11 → 14 C ABI 関数に拡張した既存パターン（memory export を含めると 15 → 必須 export 数） |
 | **Voice State stride push** | 変更なし（Phase 3 D41 の 1024 sample stride 維持） | — |
 | **WASM ロード** | 変更なし（`WebAssembly.instantiate(bytes, { env: {} })`、`wasm-opt -O3` でサイズ削減後も同じバイナリを読む） | — |
 
@@ -94,7 +94,7 @@ cargo build --target wasm32-unknown-unknown --release
    ▼
 web/static/wasm-audio.wasm (Phase 3 実測 27.78 KB gzip)
    │
-   │ scripts/check-wasm-exports.mjs (REQUIRED 配列 15 関数)
+   │ scripts/check-wasm-exports.mjs (REQUIRED 配列 14 C ABI 関数 + memory export = 15 entry)
    ▼
 PR で export 名 drift 検知
 ```
@@ -119,7 +119,7 @@ cargo build --target wasm32-unknown-unknown --release
    ▼
 web/static/wasm-audio.wasm (~13 KB gzip target、wasm-opt -O3 効果込み)
    │
-   │ scripts/check-wasm-exports.mjs (REQUIRED 配列 19 関数 = 既存 15 + Phase 4a 4)
+   │ scripts/check-wasm-exports.mjs (REQUIRED 配列 18 C ABI 関数 + memory export = 19 entry)
    ▼
 PR で export 名 drift 検知
 ```
@@ -128,27 +128,28 @@ PR で export 名 drift 検知
 
 **配置**: `scripts/copy-wasm.mjs` の本体に追加（`pnpm build:wasm` / `pnpm build:wasm:dev` の両方で動作）。
 
-**実装方針**:
+**実装方針**: 既存 `scripts/copy-wasm.mjs` は `node scripts/copy-wasm.mjs <profile>` で `process.argv[2]` から `'release'` / `'debug'` を受け取る設計（`package.json` の `build:wasm` / `build:wasm:dev` で profile を渡している）。Phase 4a でもこの引数渡しの規約を維持し、**`profile === 'release'` のときのみ wasm-opt を適用**する:
+
 ```javascript
 // scripts/copy-wasm.mjs（疑似コード、03 章で詳細）
 import { execFileSync } from 'node:child_process';
 import { existsSync, copyFileSync } from 'node:fs';
 
+const profile = process.argv[2] === 'release' ? 'release' : 'debug';
 const wasmOptBin = resolveWasmOpt();  // node_modules/.bin/wasm-opt or system wasm-opt
-const isRelease = process.env.NODE_ENV !== 'development';
 
-if (isRelease && wasmOptBin && existsSync(wasmOptBin)) {
+if (profile === 'release' && wasmOptBin && existsSync(wasmOptBin)) {
   execFileSync(wasmOptBin, ['-O3', '--strip-debug', srcPath, '-o', dstPath], { stdio: 'inherit' });
   console.log(`[copy-wasm] wasm-opt -O3 applied: ${srcSize} → ${dstSize} bytes`);
 } else {
   copyFileSync(srcPath, dstPath);
-  if (isRelease) {
+  if (profile === 'release') {
     console.warn('[copy-wasm] wasm-opt not found, skipping optimization');
   }
 }
 ```
 
-**dev ビルドでの扱い**: `pnpm build:wasm:dev` では wasm-opt をスキップ（dev ビルド時間短縮、debug 情報保持）。production ビルド (`pnpm build:wasm`) でのみ適用。
+**dev ビルドでの扱い**: `pnpm build:wasm:dev` (profile=`debug`) では wasm-opt をスキップ（dev ビルド時間短縮、debug 情報保持）。production ビルド (`pnpm build:wasm`、profile=`release`) でのみ適用。`package.json` の script 定義は不変、profile 引数渡しの既存規約を継承。
 
 **依存追加**: `package.json` の `devDependencies` に `binaryen` を追加（npm パッケージ、build-time のみ）。Cargo の依存ではないため Phase 1〜3 の「dsp-core / wasm-audio に外部 crate 追加禁止」制約に抵触しない。
 
@@ -252,9 +253,10 @@ Engine::process(output_l, output_r):
      let mod_wheel = self.mod_wheel.next_sample();  // ∈ [0, 1]
 
      # Phase 4a 追加: LFO Pitch destination を pool に伝播
-     # (per voice の length_target SmoothedValue に offset 加算、03 章で詳細)
+     # Engine 側で exp2 を 1 回計算し、factor を fan-out（per voice exp2 を回避、03 章で詳細）
      let pitch_offset_semitones = lfo_value * self.lfo_pitch_depth.next_sample() * mod_wheel * 0.5;
-     self.pool.set_lfo_pitch_offset(pitch_offset_semitones);
+     let pitch_factor = (-pitch_offset_semitones / 12.0).exp2();
+     self.pool.set_lfo_pitch_factor(pitch_factor);
 
      # Phase 4a 追加: LFO Brightness destination を pool に伝播
      let brightness_offset = lfo_value * self.lfo_brightness_depth.next_sample() * mod_wheel * 0.5;
@@ -279,7 +281,7 @@ Engine::process(output_l, output_r):
    }
 ```
 
-**注意**: `pool.set_lfo_pitch_offset` / `set_lfo_brightness_offset` は per-sample 呼出。これは Voice 内の SmoothedValue target を毎サンプル更新する設計（03 章で詳細）。コストは per voice +2 演算 × 8 voice = 16 演算/sample で許容。
+**注意**: `pool.set_lfo_pitch_factor` / `set_lfo_brightness_offset` は per-sample 呼出。Engine 側で exp2 を 1 回計算し factor を fan-out する設計のため、KarplusStrong 側は乗算のみで処理（per voice exp2 を回避、03 章で詳細）。コストは Engine exp2 (7) + fan-out (16) + per voice 適用 (24) = 47 演算/sample で許容。
 
 ## ファイル変更リスト
 
@@ -304,7 +306,7 @@ Engine::process(output_l, output_r):
 - `crates/dsp-core/src/engine.rs` — `lfo` / `mod_wheel` / `current_instrument` / `lfo_*_depth` フィールド追加、`apply_instrument` / `lfo_set_*` メソッド追加、`process` 内で LFO 適用、`handle_midi_cc` の CC#1 分岐有効化
 - `crates/dsp-core/src/params.rs`（生成ファイル）— `InstrumentKind` enum、`BODY_MODES_<INSTRUMENT>_L/R` 12 配列、`STEREO_SPREAD_<INSTRUMENT>` 6 値
 - `crates/dsp-core/src/modal_body.rs` — `set_instrument(kind, sample_rate)` メソッド追加
-- `crates/dsp-core/src/voice_pool.rs` — `set_lfo_pitch_offset` / `set_lfo_brightness_offset` 追加（全 voice fan-out）
+- `crates/dsp-core/src/voice_pool.rs` — `set_lfo_pitch_factor` / `set_lfo_brightness_offset` 追加（全 voice fan-out、factor は Engine 側で exp2 済）
 - `crates/dsp-core/src/karplus_strong.rs` — `lfo_pitch_offset` / `lfo_brightness_offset` フィールド追加（既存 `set_pitch_bend` の SmoothedValue に offset として加算する設計、03 章で詳細）
 - `crates/dsp-core/src/karplus_strong.rs` の `excitation_snapshot` を `#[cfg(test)]` でガード（D45 既存負債解消）
 
@@ -365,4 +367,4 @@ Phase 4a でも依存方向を逆転させない。`preset-store.svelte.ts` は 
 | wasm-audio | C ABI 4 関数追加でも raw WASM +1 KB 程度 | 単純な extern "C" wrapper | 04 章 §関数定義 |
 | Worklet | message dispatch 追加でも `process` 内 alloc ゼロ | switch case 追加のみ、init 時 view キャッシュ維持 | 06 章 F38 |
 | UI | preset-store / LFO / ModWheel UI 追加で初期描画 +50 ms 程度 | runes ベース、$derived の局所化 | 05 章 §LfoSection / §PresetSelector |
-| ビルド | wasm-opt -O3 で WASM gzip 13 KB | binaryen を build スクリプトに統合 | 06 章 §性能目標、F36 |
+| ビルド | WASM gzip 目標 15 KB / 警戒 18 KB / 撤退 30 KB（wasm-opt -O3 適用後の想定 ~13 KB） | binaryen を build スクリプトに統合 | 06 章 §性能目標、F39 |

@@ -30,12 +30,12 @@ Phase 3 で確立した「ブラウザで動作する 8 音ポリフォニック
 - **PresetSelector UI**: `web/src/lib/components/PresetSelector.svelte` を新規、ドロップダウン上段に Factory Preset、下段に User Preset、保存・削除ボタン
 - **多楽器プリセット 6 種**: `BODY_MODES_GUITAR_CLASSICAL` / `BODY_MODES_UKULELE` / `BODY_MODES_MANDOLIN` / `BODY_MODES_BASS` / `BODY_MODES_GUITAR_STEEL` / `BODY_MODES_SITAR` を dsp-core に const テーブル化（Phase 3 D32 と同形式）、それぞれ stereo_spread 個別値
 - **`Engine::apply_instrument(kind)`**: 楽器切替で `pool.all_notes_off()` → 新楽器の Modal 係数差し替え → `modal_body.prepare(sample_rate)` → `modal_body.reset()` を実行
-- **C ABI 4 関数追加**: `synth_apply_instrument` / `synth_lfo_set_rate` / `synth_lfo_set_waveform` / `synth_lfo_set_depth`、Phase 3 既存 15 関数（D18 + D38 / D38b / D39 / D41 で 12 + 3）に追加
+- **C ABI 4 関数追加**: `synth_apply_instrument` / `synth_lfo_set_rate` / `synth_lfo_set_waveform` / `synth_lfo_set_depth`、Phase 3 既存 14 C ABI 関数 + memory export = 15 required exports（D18 + D38 / D38b / D39 / D41 で 11 + 3）に追加。Phase 4a 後は **18 C ABI 関数 + memory export = 19 required exports**
 - **ModWheel UI**: `<input type="range">` でモジュレーション wheel の UI スライダー、WebMIDI 物理 wheel と同経路（CC#1 dispatch）
 - **LFO controls UI**: rate / waveform / 3 destinations の depth × 3 を含む LfoSection コンポーネント
-- Phase 3 の制約をすべて維持: AudioWorklet `process` 中ヒープ確保ゼロ（WASM 側 + JS 側）、C ABI 既存 15 関数完全互換、Svelte 5 runes、`dsp-core` / `wasm-audio` 依存ゼロ
-- WASM gzip サイズ < 30 KB（Phase 3 実測 27.78 KB → wasm-opt -O3 適用後 ~13 KB / target の 43%）、Worklet 本番バンドル < 10 KB
-- ポリフォニー 8 音 + Body + LFO 動作時の `process` 1 回 < 1.7 ms（128 frames @ 48 kHz、Phase 3 比 +0.2 ms 余裕、F39 で必須化）
+- Phase 3 の制約をすべて維持: AudioWorklet `process` 中ヒープ確保ゼロ（WASM 側 + JS 側）、C ABI 既存 14 関数 + memory export = 15 required exports 完全互換、Svelte 5 runes、`dsp-core` / `wasm-audio` 依存ゼロ
+- WASM gzip サイズの **3 段階基準**: **目標 < 15 KB**（wasm-opt -O3 適用後の想定 ~13 KB）、**警戒 < 18 KB**（要調査ライン、F39 で計測）、**撤退 < 30 KB**（Phase 3 から継承の最終 target、超過で R32 楽器係数削減）。Worklet 本番バンドル < 10 KB
+- ポリフォニー 8 音 + Body + LFO 動作時の `process` 1 回 < 1.7 ms（128 frames @ 48 kHz、Phase 3 比 +0.2 ms 余裕、**F46 で必須化** = release cargo timing test）
 
 ## 非ゴール（Phase 4a には含めない）
 
@@ -117,9 +117,9 @@ Phase 1 / 2 / 3 の主要設計判断 43 項目（D1-D43、D38b 含む）を Pha
 | **D54** | stereo_spread の楽器別化 | **楽器プリセットの一部として保持**。Phase 3 のグローバル const `STEREO_SPREAD = 0.05` を撤回し、`InstrumentPreset` 構造体内の `stereo_spread: f32` フィールドに変更。各楽器の値は pre-research §7.3 の表 | 03 章 |
 | **D55** | Mono+Sustain 現状維持 | **Phase 3 D40 P1-2 と同じく no-op 継続**。Mono mode の Sustain は Phase 2 既存挙動（Phase 2 D29）を完全継承。Mono の last-note priority と release defer は本質的に相反するため Phase 4a でも実装しない。Phase 5 以降で需要があれば再評価 | 03 章 |
 
-## C ABI 既存 15 関数の互換性チェックリスト
+## C ABI 既存関数の互換性チェックリスト（14 C ABI 関数 + memory export = 15 required exports）
 
-Phase 4a では以下の Phase 3 確定 C ABI 関数を **シグネチャ・export 名・動作すべて完全に維持** する（D18 / D38 / D39 / D41 継承）。
+Phase 4a では以下の Phase 3 確定 C ABI 関数 14 件 + `memory` export を **シグネチャ・export 名・動作すべて完全に維持** する（D18 / D38 / D39 / D41 継承）。`scripts/check-wasm-exports.mjs` の `REQUIRED` 配列は memory を含む 15 entry。
 
 | 関数名 | シグネチャ | Phase 4a での扱い |
 |---|---|---|
@@ -196,7 +196,7 @@ Phase 1 / 2 / 3 の 4 レイヤ構成は維持。LFO が dsp-core 内 Engine の
 │  + lfo_set_rate / set_waveform / set_depth          │  ← Phase 4a 差分
 │  + apply_instrument                                  │  ← Phase 4a 差分
 └──────────────┬─────────────────────────────────────┘
-               │ FFI（共有メモリ + ポインタ、既存 15 関数 + 4 関数）
+               │ FFI（共有メモリ + ポインタ、既存 14 関数 + Phase 4a 4 関数 = 18 C ABI 関数 + memory export）
                ▼
 ┌────────────────────────────────────────────────────┐
 │ wasm-audio（Rust crate, cdylib）                   │

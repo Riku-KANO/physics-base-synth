@@ -59,8 +59,8 @@ git commit `chore(retrospective): F38b 実機計測結果を追記 (D44)`
   binaryen は npm devDependency（build-time tooling、Cargo 依存ではない）として許容
 - **ring buffer 不変条件**: write_index / read 位置は `% buf_len` で剰余、`% length_int` には
   しない（LFO Pitch destination で length_int が動的になるため、03 章 §統合フロー参照）
-- **Phase 3 既存 API 完全互換**: C ABI 既存 15 関数 / Voice trait の `set_pitch_bend` /
-  `synth_midi_cc` 等のシグネチャは不変。CC#1 (Mod Wheel) 分岐の有効化は内部実装の変更のみ
+- **Phase 3 既存 API 完全互換**: C ABI 既存 14 関数 + memory export = 15 required exports / Voice trait の
+  `set_pitch_bend` / `synth_midi_cc` 等のシグネチャは不変。CC#1 (Mod Wheel) 分岐の有効化は内部実装の変更のみ
 - **Mod Wheel = 0 で Phase 3 互換**: LFO depth が 1.0 でも Mod Wheel = 0 (デフォルト) で
   LFO 効果ゼロ、Phase 3 と完全に同じ音が出ること。`test_mod_wheel_zero_disables_lfo` で保証
 - **Default プリセット = Phase 3 既存ギターボディ係数**: 楽器 enum kind=0 の Modal 係数が

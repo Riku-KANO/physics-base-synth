@@ -2,15 +2,15 @@
 
 ## 目的
 
-`crates/wasm-audio/src/lib.rs` の C ABI 境界に Phase 4a で追加する 4 関数（`synth_apply_instrument` / `synth_lfo_set_rate` / `synth_lfo_set_waveform` / `synth_lfo_set_depth`）を定義し、`scripts/check-wasm-exports.mjs` の `REQUIRED` 配列を更新する。Phase 1 / 2 / 3 の C ABI 既存 15 関数のシグネチャ・export 名・動作はすべて完全互換を維持する（D18 / D38 / D39 / D41 継承）。
+`crates/wasm-audio/src/lib.rs` の C ABI 境界に Phase 4a で追加する 4 関数（`synth_apply_instrument` / `synth_lfo_set_rate` / `synth_lfo_set_waveform` / `synth_lfo_set_depth`）を定義し、`scripts/check-wasm-exports.mjs` の `REQUIRED` 配列を更新する。Phase 1 / 2 / 3 の C ABI 既存 **14 関数 + memory export = 15 required exports** のシグネチャ・export 名・動作はすべて完全互換を維持する（D18 / D38 / D39 / D41 継承）。Phase 4a 後は **18 C ABI 関数 + memory export = 19 required exports**。
 
 ## 他文書との関係
 
-- 上流: [`01-overview.md`](./01-overview.md)（C ABI 既存 15 関数の互換性チェックリスト + Phase 4a で追加する 4 関数）、[`03-dsp-core-spec.md`](./03-dsp-core-spec.md)（`Engine::apply_instrument` / `Engine::lfo_set_*` の inherent methods 仕様）
+- 上流: [`01-overview.md`](./01-overview.md)（C ABI 既存 14 C ABI 関数 + memory export = 15 required exports の互換性チェックリスト + Phase 4a で追加する 4 関数）、[`03-dsp-core-spec.md`](./03-dsp-core-spec.md)（`Engine::apply_instrument` / `Engine::lfo_set_*` の inherent methods 仕様）
 - 下流: [`05-web-frontend-spec.md`](./05-web-frontend-spec.md)（Worklet `WasmExports` interface 拡張）、[`07-implementation-checklist.md`](./07-implementation-checklist.md)
 - 並行: Phase 3 [`04-wasm-audio-spec.md`](../2026-05-07-003-phase3/04-wasm-audio-spec.md) — 同形式の C ABI 拡張パターン参照
 
-## C ABI 既存 15 関数（Phase 4a で完全維持）
+## C ABI 既存 14 関数 + memory export = 15 required exports（Phase 4a で完全維持）
 
 | 関数名 | シグネチャ | Phase 4a 状況 |
 |---|---|---|
@@ -195,18 +195,22 @@ import { copyFileSync } from 'node:fs';
 copyFileSync(srcPath, dstPath);
 ```
 
-Phase 4a で `wasm-opt -O3 --strip-debug` を統合:
+Phase 4a で `wasm-opt -O3 --strip-debug` を統合（既存 `process.argv[2]` の profile 引数渡し規約を維持）:
 ```javascript
 // scripts/copy-wasm.mjs (Phase 4a 拡張)
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, statSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { copyFileSync, statSync, existsSync, mkdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const profile = process.argv[2] === 'release' ? 'release' : 'debug';
 
 function resolveWasmOpt() {
   // Windows: .cmd 拡張子も探す
   const candidates = [
-    resolve('node_modules/.bin/wasm-opt'),
-    resolve('node_modules/.bin/wasm-opt.cmd'),  // Windows
+    resolve(__dirname, '../node_modules/.bin/wasm-opt'),
+    resolve(__dirname, '../node_modules/.bin/wasm-opt.cmd'),  // Windows
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;
@@ -214,10 +218,9 @@ function resolveWasmOpt() {
   return null;
 }
 
-const isProd = process.env.NODE_ENV !== 'development';
 const wasmOptBin = resolveWasmOpt();
 
-if (isProd && wasmOptBin) {
+if (profile === 'release' && wasmOptBin) {
   const beforeSize = statSync(srcPath).size;
   execFileSync(wasmOptBin, ['-O3', '--strip-debug', srcPath, '-o', dstPath], {
     stdio: 'inherit',
@@ -229,7 +232,7 @@ if (isProd && wasmOptBin) {
   );
 } else {
   copyFileSync(srcPath, dstPath);
-  if (isProd && !wasmOptBin) {
+  if (profile === 'release' && !wasmOptBin) {
     console.warn('[copy-wasm] wasm-opt not found in node_modules/.bin, ' +
                  'install binaryen as devDependency');
   }
@@ -237,9 +240,10 @@ if (isProd && wasmOptBin) {
 ```
 
 **重要**:
-- dev ビルド (`pnpm build:wasm:dev`) では NODE_ENV=development を渡して wasm-opt をスキップ（ビルド時間短縮 + デバッグ情報保持）
-- production ビルド (`pnpm build:wasm`) で wasm-opt 適用、サイズログを出力
+- dev ビルド (`pnpm build:wasm:dev`、`node scripts/copy-wasm.mjs debug`) では profile === 'debug' で wasm-opt をスキップ（ビルド時間短縮 + デバッグ情報保持）
+- production ビルド (`pnpm build:wasm`、`node scripts/copy-wasm.mjs release`) で profile === 'release' のとき wasm-opt 適用、サイズログを出力
 - wasm-opt 不在時は警告ログ + 素コピーで続行（CI 環境差分を吸収）
+- `package.json` の script 定義は不変（既存 `node scripts/copy-wasm.mjs release` / `node scripts/copy-wasm.mjs debug` 規約を継承）
 
 ### `package.json` 追加
 
@@ -275,7 +279,7 @@ C ABI レベルのテストは Phase 1〜3 と同じく **Rust 側の `cargo tes
 | 各関数が null handle で no-op | dev ビルドで `synth_lfo_set_rate(0, 5.0)` 呼出 → panic / segfault なし |
 | `apply_instrument(7)` 等の不正値で no-op | `from_u32` の None 経路、`if let Some` で skip |
 | `lfo_set_depth(99, 0.5)` 等の不正 dest で no-op | 同上 |
-| 既存 15 関数の動作完全互換 | Phase 3 既存 cargo test 全件パス + 実機での Phase 3 機能動作確認 |
+| 既存 14 関数の動作完全互換 | Phase 3 既存 cargo test 全件パス + 実機での Phase 3 機能動作確認 |
 
 ## 依存方向の確認
 

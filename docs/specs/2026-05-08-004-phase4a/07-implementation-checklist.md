@@ -44,39 +44,51 @@ Phase 4a 実装着手前に以下を確認:
 - [ ] `package.json` の `devDependencies` に `binaryen` を追加（`pnpm add -D binaryen`）
 - [ ] `scripts/copy-wasm.mjs` を [`04-wasm-audio-spec.md` §wasm-opt 統合の詳細](./04-wasm-audio-spec.md#scriptscopy-wasmmjs-の-wasm-opt-統合d45) に従い拡張:
   - [ ] `resolveWasmOpt()` ヘルパで `node_modules/.bin/wasm-opt` (Linux/Mac) / `wasm-opt.cmd` (Windows) を探索
-  - [ ] `process.env.NODE_ENV !== 'development'` の条件で wasm-opt を実行
+  - [ ] **既存の `profile = process.argv[2] === 'release' ? 'release' : 'debug'` 規約を維持**し、`profile === 'release'` の条件で wasm-opt を実行（`package.json` の script 引数渡しは不変）
   - [ ] `execFileSync(wasmOptBin, ['-O3', '--strip-debug', srcPath, '-o', dstPath])` で適用
   - [ ] beforeSize / afterSize をログ出力
   - [ ] wasm-opt 不在時は warn + 素コピーで続行
-- [ ] `pnpm build:wasm` を実行、wasm-opt 適用ログが出力されることを確認
-- [ ] `pnpm build:wasm:dev` を実行、wasm-opt スキップで素コピーされることを確認
+- [ ] `pnpm build:wasm` を実行、wasm-opt 適用ログが出力されることを確認（profile=release）
+- [ ] `pnpm build:wasm:dev` を実行、wasm-opt スキップで素コピーされることを確認（profile=debug）
 - [ ] gzip サイズ計測:
   ```bash
   pnpm build
   gzip -kc web/build/_app/immutable/assets/wasm_audio.*.wasm | wc -c
   ```
-  - [ ] 期待値: < 18 KB（target ~13 KB、Phase 3 27.78 KB から大幅削減）
+  - [ ] **目標値**: < 15 KB（想定 ~13 KB、Phase 3 27.78 KB から大幅削減）
+  - [ ] **警戒**: < 18 KB（超えたら `wasm-opt --print-stats` で調査）
+  - [ ] **撤退**: < 30 KB（超えたら R32 適用 = 楽器 4 種に削減 / Modal M=5）
 - [ ] gzip サイズ超過時は R32 対策（pre-research §9.2 早期撤退ライン）
 - [ ] git commit `build: wasm-opt -O3 を copy-wasm.mjs に統合 (D45, F39)`
 - **検証**: F39 達成
 
-#### Step 3. `excitation_snapshot` を `#[cfg(test)]` でガード（D45 既存負債解消）
+#### Step 3. `excitation_snapshot` を `#[cfg(test)]` でガード + 該当 integration test を unit test へ移動（D45 既存負債解消）
+
+`excitation_snapshot` は現状 7 箇所の integration test (`crates/dsp-core/tests/karplus_strong_pick_tests.rs`) から呼ばれているため、`#[cfg(test)]` ガードだけだと integration test ビルド時に未定義となる。本 Step では (a) `excitation_snapshot` を `#[cfg(test)]` ガードに変更し、(b) 該当 integration test を `karplus_strong.rs` 内の `#[cfg(test)] mod tests` ブロックに移動する。
 
 - [ ] `crates/dsp-core/src/karplus_strong.rs` の `excitation_snapshot` 定義を確認:
   ```rust
   #[doc(hidden)]
   pub fn excitation_snapshot(&self) -> Vec<f32> { ... }
   ```
-- [ ] 上記を `#[cfg(test)]` ガードに変更:
+- [ ] `crates/dsp-core/tests/karplus_strong_pick_tests.rs` の `excitation_snapshot` を呼ぶ test 関数 7 箇所を抽出（Phase 3 既存）:
+  - `test_pick_min_beta_minimal_shape`
+  - `test_pick_position_node_at_beta_half`
+  - `test_pick_position_attenuates_kth_harmonic` の 2 ループ
+  - `test_pick_internal_k_zero_branch`
+  - その他 `excitation_snapshot` 参照箇所
+- [ ] 上記 test 関数を `crates/dsp-core/src/karplus_strong.rs` 末尾の `#[cfg(test)] mod excitation_tests { ... }` ブロックに移動。`use super::*;` を冒頭に置き、private state にアクセスできる利点を活かして `excitation_snapshot` 経由を unit 直接 access に置換しても良い
+- [ ] `crates/dsp-core/tests/karplus_strong_pick_tests.rs` の対応 test 関数を削除（unit test へ移動済み）
+- [ ] `excitation_snapshot` を `#[cfg(test)]` ガードに変更:
   ```rust
   #[cfg(test)]
-  pub fn excitation_snapshot(&self) -> Vec<f32> { ... }
+  pub(crate) fn excitation_snapshot(&self) -> Vec<f32> { ... }
   ```
-- [ ] `cargo test -p dsp-core` で全テスト通過を確認（test 環境で `excitation_snapshot` が見える）
+- [ ] `cargo test -p dsp-core` で全テスト通過を確認（移動した test も同じ件数）
 - [ ] `cargo build --target wasm32-unknown-unknown --release` でビルド成功
 - [ ] WASM gzip サイズが Step 2 から微減することを確認（~50 byte の関数除外）
-- [ ] git commit `refactor(karplus-strong): excitation_snapshot を cfg(test) でガード (D45, F44)`
-- **検証**: F44 達成
+- [ ] git commit `refactor(karplus-strong): excitation_snapshot を cfg(test) でガード + tests を unit test へ移動 (D45, F44)`
+- **検証**: F44 達成、Phase 3 既存テスト件数の保持
 
 ### フェーズ β — params.json 拡張と多楽器係数（2 ステップ）
 
@@ -145,7 +157,7 @@ Phase 4a 実装着手前に以下を確認:
 
 ### フェーズ γ — Mod Wheel + LFO destinations（2 ステップ）
 
-#### Step 6. Mod Wheel CC#1 分岐有効化（D49）
+#### Step 6. Mod Wheel CC#1 分岐有効化 + WebMIDI / UI 同期（D49 / F41）
 
 - [ ] `crates/dsp-core/src/engine.rs` の `Engine::handle_midi_cc` の `CC_MOD_WHEEL` 分岐を実装:
   ```rust
@@ -154,26 +166,28 @@ Phase 4a 実装着手前に以下を確認:
   }
   ```
   Phase 3 では no-op だった経路を有効化
-- [ ] テスト追加 (`tests/midi_cc_tests.rs` 拡張):
+- [ ] **`web/src/lib/input/midi-cc.ts` を拡張**: CC#1 受信時に `synth.modWheel = data[2] / 127` を更新（[`05-web-frontend-spec.md` §midi-cc.ts の Phase 4a 変更点](./05-web-frontend-spec.md#midi-ccts-の-phase-4a-変更点)）
+- [ ] テスト追加 (`crates/dsp-core/tests/midi_cc_tests.rs` 拡張):
   - [ ] `test_midi_cc_mod_wheel_sets_target`
   - [ ] `test_midi_cc_mod_wheel_clamps_to_range`
 - [ ] `cargo test -p dsp-core` がすべてパス
-- [ ] git commit `feat(engine): Mod Wheel (CC#1) 分岐を有効化 (D49, F41)`
-- **検証**: F41 達成
+- [ ] `pnpm --filter ./web check` がパス
+- [ ] git commit `feat(engine,web): Mod Wheel (CC#1) 分岐を有効化 + WebMIDI/UI 同期 (D49, F41)`
+- **検証**: F41 達成（cargo test + Web 経路）
 
 #### Step 7. LFO destinations を Engine::process に統合（D48）
 
-- [ ] `crates/dsp-core/src/voice_pool.rs` に `set_lfo_pitch_offset(semitones)` / `set_lfo_brightness_offset(offset)` を追加（全 voice fan-out）
-- [ ] `crates/dsp-core/src/traits.rs` の `Voice` trait に `set_lfo_pitch_offset` / `set_lfo_brightness_offset` を追加
+- [ ] `crates/dsp-core/src/voice_pool.rs` に `set_lfo_pitch_factor(factor)` / `set_lfo_brightness_offset(offset)` を追加（全 voice fan-out）
+- [ ] `crates/dsp-core/src/traits.rs` の `Voice` trait に `set_lfo_pitch_factor` / `set_lfo_brightness_offset` を追加
 - [ ] `crates/dsp-core/src/voice.rs` で `KarplusStrong` 向け委譲を追記
-- [ ] `crates/dsp-core/src/karplus_strong.rs` に `lfo_pitch_offset_semitones: f32` / `lfo_brightness_offset: f32` フィールドを追加（`#[inline(always)]` setter）
+- [ ] `crates/dsp-core/src/karplus_strong.rs` に `lfo_pitch_factor: f32` (初期値 1.0) / `lfo_brightness_offset: f32` フィールドを追加（`#[inline(always)]` setter、Engine 側で exp2 計算済の factor を受け取る設計）
 - [ ] `KarplusStrong::process_sample` で:
   - [ ] LFO pitch offset を `length_target.next_sample()` に係数化して適用（[`03-dsp-core-spec.md` §process_sample 内での適用](./03-dsp-core-spec.md#process_sample-内での適用)）
   - [ ] brightness LPF 計算で `(brightness.next_sample() + lfo_brightness_offset).clamp(0.0, 1.0)` を使用
   - [ ] 既存の length 再計算 skip ロジック（cached_length 差分 < 1e-5）は維持、ただし effective_length 計算後の差分で判定
 - [ ] `Engine::process` の per-sample loop を Phase 4a 拡張（[`03-dsp-core-spec.md` §Engine::process の per-sample loop 拡張](./03-dsp-core-spec.md#engineprocess-の-per-sample-loop-拡張d46-d49)）:
   - [ ] LFO process_sample → mod_wheel next_sample → 3 つの depth を計算
-  - [ ] `pool.set_lfo_pitch_offset(pitch_offset)` / `pool.set_lfo_brightness_offset(brightness_offset)` を per sample 呼出
+  - [ ] **Engine 側で `pitch_factor = exp2(-pitch_offset_semitones / 12)` を 1 回だけ計算**、`pool.set_lfo_pitch_factor(pitch_factor)` / `pool.set_lfo_brightness_offset(brightness_offset)` を per sample 呼出（per voice exp2 を回避）
   - [ ] `volume_multiplier` を `combined` gain に乗算
 - [ ] テスト追加 (`tests/lfo_destinations_tests.rs` 新規):
   - [ ] `test_lfo_pitch_destination_modulates_voice_length`
@@ -301,8 +315,9 @@ Phase 4a 実装着手前に以下を確認:
   ```bash
   gzip -kc web/build/_app/immutable/assets/wasm_audio.*.wasm | wc -c
   ```
-  - [ ] gzip < 18 KB（target ~13 KB）
-  - [ ] サイズが超過した場合 R32 適用（楽器を 4 種に削減等）
+  - [ ] **目標**: gzip < 15 KB（想定 ~13 KB）
+  - [ ] **警戒**: gzip < 18 KB（超えたら `wasm-opt --print-stats` で調査）
+  - [ ] **撤退**: gzip < 30 KB（超えたら R32 適用 = 楽器 4 種に削減 / Modal M=5）
 - [ ] Worklet 本番バンドルサイズ計測（< 10 KB target）:
   ```powershell
   Get-ChildItem web\build\_app\immutable\assets\synth-processor*.js | Select-Object Name, Length
@@ -352,7 +367,7 @@ Phase 4a 実装着手前に以下を確認:
 
 - [ ] `cargo test --release -p dsp-core` 最終確認、全件パス
 - [ ] `pnpm check` / `pnpm lint` / `pnpm fmt` 最終確認
-- [ ] `pnpm build` 最終ビルド成功確認、gzip < 18 KB 確認
+- [ ] `pnpm build` 最終ビルド成功確認、gzip < 15 KB 目標 / < 18 KB 警戒 / < 30 KB 撤退ラインを確認
 - [ ] PR 作成（`gh pr create`）:
   - [ ] PR タイトル: `Phase 4a: F38b + LFO + Mod Wheel + Preset + 多楽器 6 種`
   - [ ] PR ボディに Phase 4a スコープサマリ + 検証結果（F38b avg/max、gzip サイズ、テスト件数）
