@@ -266,10 +266,10 @@ Phase 4a 実装着手前に以下を確認:
 - [ ] `pnpm dev` でブラウザ起動、DevTools Console で:
   ```javascript
   __synthDev は Phase 3 同等で setMode のみ。
-  // 一時的に F40 経路確認用に手動操作（Step 14 で UI 完成、暫定）
+  // 一時的に F40 経路確認用に手動操作（Step 13 で UI 完成、暫定）
   ```
 - [ ] git commit `feat(web): messages / WasmExports / SynthEngine に LFO + applyInstrument 経路追加`
-- **検証**: F40〜F43 経路確認、UI は Step 13 / 14 で完成
+- **検証**: F40〜F43 経路確認、UI は Step 12 / 13 で完成
 
 ### フェーズ ζ — UI 実装（2 ステップ）
 
@@ -295,7 +295,7 @@ Phase 4a 実装着手前に以下を確認:
 - [ ] `web/src/routes/+page.svelte` に `<PresetSelector />` / `<ModWheel />` / `<LfoSection />` を配置（[`05-web-frontend-spec.md` §+page.svelte の Phase 4a 変更点](./05-web-frontend-spec.md#pagesvelte-の-phase-4a-変更点)）
 - [ ] `pnpm --filter ./web check` / `pnpm --filter ./web lint` がパス
 - [ ] git commit `feat(web): ModWheel / LfoSection / PresetSelector UI 実装 (D46-D52)`
-- **検証**: F40 / F41 / F42 / F43 のうち UI 経路が実装される（実機確認は Step 16）
+- **検証**: F40 / F41 / F42 / F43 のうち UI 経路が実装される（実機確認は Step 15）
 
 ### フェーズ η — 統合検証（2 ステップ）
 
@@ -388,10 +388,9 @@ Step 2 (wasm-opt -O3) ─ Step 3 (excitation_snapshot cfg(test))
 Step 4 (params.json + gen-params.mjs)
   └─ InstrumentKind / 楽器係数 12 配列の生成
       ▼
-Step 5 (lfo.rs + Engine フィールド) ─ (process 内 LFO 適用は Step 7 まで保留)
+Step 5 (lfo.rs + Engine フィールド = mod_wheel: SmoothedValue を含む)
       ▼
-Step 6 (Mod Wheel CC#1)
-  └─ Step 5 と独立、並列可
+Step 6 (Mod Wheel CC#1 + WebMIDI/UI 同期) ← Step 5 で追加された mod_wheel フィールドに依存
       ▼
 Step 7 (LFO destinations 統合) ← Step 5 + Step 6 完了が前提
   └─ Engine::process の per-sample loop が完成
@@ -420,7 +419,7 @@ Step 17 (PR 作成 + main マージ)
 並列実装可能なポイント:
 
 - Step 2（wasm-opt）と Step 3（excitation_snapshot）は独立、並列可
-- Step 5（lfo.rs）と Step 6（Mod Wheel）は独立、並列可（Step 7 で統合）
+- **Step 6（Mod Wheel CC#1 + WebMIDI/UI 同期）は Step 5（lfo.rs + Engine フィールド追加、`mod_wheel: SmoothedValue` を含む）に依存**: `Engine::handle_midi_cc` の CC_MOD_WHEEL 分岐で `self.mod_wheel.set_target(v)` を呼ぶため、Step 5 のフィールド追加が前提。並列実装は不可
 - Step 8（ModalBody set_instrument）は Step 5/6/7 と独立、Step 4 完了後ならいつでも可
 
 ## 達成ライン早見表
@@ -452,7 +451,7 @@ Step 17 (PR 作成 + main マージ)
 - **Step 1（F38b 計測）が最重要**。ここで Phase 3 完成判定を閉じないと Phase 4a の CPU 余裕が不明、target 超過時は R30 を Phase 4a 内で対処する必要があり scope が大きく変わる
 - **Step 4（params.json 拡張）の生成物は git commit する**（Phase 1〜3 の D25 継承）。生成物のレビュー観点は「Default kind の係数が Phase 3 既存値と完全一致しているか」が最重要
 - **Step 5（lfo.rs）の `Lfo::process_sample` で `f32::sin()` を直接呼ぶ**。LUT 不要（CPU 影響軽微、03 章 §Lfo の根拠）
-- **Step 6（Mod Wheel）は 1 行追加**（Phase 3 の no-op 経路を `self.mod_wheel.set_target(v)` に変更）。最も小さい Step だがテストは F41 として独立で書く
+- **Step 6（Mod Wheel CC#1 + WebMIDI/UI 同期）**: `Engine::handle_midi_cc` の CC#1 分岐有効化（Step 5 で追加済の `self.mod_wheel.set_target(v)`）に加え、`web/src/lib/input/midi-cc.ts` の CC#1 経路で `synth.modWheel = data[2] / 127` を更新する Web 側変更を含む。Rust + Web の両側に変更が走るためテストは cargo test (`midi_cc_tests.rs`) と svelte-check の両方で確認
 - **Step 7（LFO destinations 統合）が最大のロジック**。`KarplusStrong::process_sample` で `length_target.next_sample()` 後の効果値計算 + brightness 加算を per voice / per sample で実装。**`test_mod_wheel_zero_disables_lfo` が Phase 3 互換性を保証する**（Mod Wheel = 0 で LFO depth 任意でも音は変調されない）
 - **Step 9（Engine::apply_instrument）の `pool.all_notes_off()` 順序**: `current_instrument` 更新の前に呼ぶ（音切れの方向性として「楽器が変わる前に古い voice を止める」が自然）
 - **Step 10（C ABI）の関数追加順**: 1 commit で 4 関数まとめて追加 + REQUIRED 配列更新。**Phase 3 の D38 / D41 と同じパターン**

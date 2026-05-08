@@ -181,24 +181,39 @@ Voice State view は Phase 3 同等。LFO / 楽器切替で WASM memory が grow
 export class SynthEngine {
   // ...Phase 3 既存...
 
+  // Phase 4a 追加: LFO / instrument の現在値を保持 (Worklet 再起動時の再送用)
+  // 既存 Phase 1-3 の `currentParams: Map<number, number>` と同形式の永続化方針。
+  private currentLfo: { rate: number; waveform: LfoWaveformKey;
+                        pitchDepth: number; brightnessDepth: number; volumeDepth: number } = {
+    rate: 5.0, waveform: 'sine',
+    pitchDepth: 0, brightnessDepth: 0, volumeDepth: 0,
+  };
+  private currentInstrument: InstrumentKindKey = 'default';
+
   // Phase 4a (D46-D49)
   lfoSetRate(hz: number): void {
+    this.currentLfo.rate = hz;        // 状態保持 (start 成功後に再送)
     if (!this.ready) return;
     this.post({ type: 'lfoSetRate', hz });
   }
 
   lfoSetWaveform(kind: LfoWaveformKey): void {
+    this.currentLfo.waveform = kind;
     if (!this.ready) return;
     this.post({ type: 'lfoSetWaveform', kind });
   }
 
   lfoSetDepth(dest: LfoDestinationKey, depth: number): void {
+    if (dest === 'pitch') this.currentLfo.pitchDepth = depth;
+    else if (dest === 'brightness') this.currentLfo.brightnessDepth = depth;
+    else if (dest === 'volume') this.currentLfo.volumeDepth = depth;
     if (!this.ready) return;
     this.post({ type: 'lfoSetDepth', dest, depth });
   }
 
   // Phase 4a (D52)
   applyInstrument(kind: InstrumentKindKey): void {
+    this.currentInstrument = kind;
     if (!this.ready) return;
     this.post({ type: 'applyInstrument', kind });
   }
@@ -223,10 +238,30 @@ export class SynthEngine {
     this.lfoSetDepth('brightness', preset.lfo.brightnessDepth);
     this.lfoSetDepth('volume', preset.lfo.volumeDepth);
   }
+
+  // Phase 4a: start() 成功時の再送 (既存 currentParams の再送と同位置で実装)
+  // start() の最後で呼び出される（Worklet 再初期化 / retry でも整合性保つ）
+  private resendPhase4aState(): void {
+    // 楽器を最初に送る (内部で all_notes_off + Modal 再構築)
+    this.post({ type: 'applyInstrument', kind: this.currentInstrument });
+    this.post({ type: 'lfoSetRate', hz: this.currentLfo.rate });
+    this.post({ type: 'lfoSetWaveform', kind: this.currentLfo.waveform });
+    this.post({ type: 'lfoSetDepth', dest: 'pitch', depth: this.currentLfo.pitchDepth });
+    this.post({ type: 'lfoSetDepth', dest: 'brightness', depth: this.currentLfo.brightnessDepth });
+    this.post({ type: 'lfoSetDepth', dest: 'volume', depth: this.currentLfo.volumeDepth });
+  }
 }
 ```
 
 `applyPreset` は **MessagePort で個別送信** する設計。Phase 3 既存の rAF スロットル (`flushParams`) は `setParam` 経路のみに作用し、`lfoSetRate` 等は即時送信。プリセット切替は数 ms 内で完了するため UX 影響なし。
+
+**`start()` の Phase 4a 拡張**: 既存 Phase 1-3 では `start()` の最後で `currentParams` を Worklet に再送していた:
+```typescript
+for (const [id, value] of this.currentParams) {
+  this.post({ type: 'setParam', id, value });
+}
+```
+Phase 4a でこの直後に **`this.resendPhase4aState()` を呼出**、LFO / 楽器の状態も再送する。これで Worklet 再初期化 / retry 時に Param だけ復元され LFO/instrument は default のまま、という非対称を防ぐ。`engine.ts` の `start()` メソッド末尾に 1 行追加。
 
 ## preset-schema.ts (Phase 4a 新規)
 
@@ -786,27 +821,38 @@ if (import.meta.env.DEV) {
 
   onMount(() => {
     presetStore.load();
+    // 起動時に最後に選択された Preset を復元 (UI state も同期)
+    const lastPreset = presetStore.findByName(presetStore.currentPresetName);
+    if (lastPreset && synth.engine.isReady()) {
+      applyPresetToUiState(lastPreset);
+    }
   });
+
+  /**
+   * Preset 適用時の UI state 同期 helper。handleSelect / handleDelete / 起動時の
+   * last preset 復元など、すべての preset 切替経路で同じ処理を使う（DRY）。
+   * Engine への適用は `presetStore.apply` 経由の `engine.applyPreset` で済んでいる前提。
+   */
+  function applyPresetToUiState(preset: PresetV1): void {
+    synth.damping = preset.params.damping;
+    synth.brightness = preset.params.brightness;
+    synth.outputGain = preset.params.outputGain;
+    synth.pickPosition = preset.params.pickPosition;
+    synth.bodyWet = preset.params.bodyWet;
+    synth.lfoRate = preset.lfo.rate;
+    synth.lfoWaveform = preset.lfo.waveform;
+    synth.lfoPitchDepth = preset.lfo.pitchDepth;
+    synth.lfoBrightnessDepth = preset.lfo.brightnessDepth;
+    synth.lfoVolumeDepth = preset.lfo.volumeDepth;
+    synth.instrument = preset.instrument;
+  }
 
   function handleSelect(e: Event) {
     const name = (e.target as HTMLSelectElement).value;
     if (name) {
       presetStore.apply(name, synth.engine);
-      // synth.svelte.ts の $state も同期 (UI スライダー反映)
       const preset = presetStore.findByName(name);
-      if (preset) {
-        synth.damping = preset.params.damping;
-        synth.brightness = preset.params.brightness;
-        synth.outputGain = preset.params.outputGain;
-        synth.pickPosition = preset.params.pickPosition;
-        synth.bodyWet = preset.params.bodyWet;
-        synth.lfoRate = preset.lfo.rate;
-        synth.lfoWaveform = preset.lfo.waveform;
-        synth.lfoPitchDepth = preset.lfo.pitchDepth;
-        synth.lfoBrightnessDepth = preset.lfo.brightnessDepth;
-        synth.lfoVolumeDepth = preset.lfo.volumeDepth;
-        synth.instrument = preset.instrument;
-      }
+      if (preset) applyPresetToUiState(preset);
     }
   }
 
@@ -836,8 +882,10 @@ if (import.meta.env.DEV) {
   function handleDelete() {
     if (confirm(`Delete preset "${presetStore.currentPresetName}"?`)) {
       presetStore.delete(presetStore.currentPresetName);
-      // 削除後はデフォルトに戻す
+      // 削除後はデフォルトに戻す。engine と UI state を `applyPresetToUiState` 経由で揃える。
       presetStore.apply('Default', synth.engine);
+      const defaultPreset = presetStore.findByName('Default');
+      if (defaultPreset) applyPresetToUiState(defaultPreset);
     }
   }
 </script>
@@ -1046,7 +1094,7 @@ export function handleMidiMessage(data: Uint8Array, engine: SynthEngine): boolea
 
 `pnpm fmt` で新規ファイルを整形。
 
-### 単体動作確認（Step 14 で実施）
+### 単体動作確認（Step 15 で実施）
 
 `pnpm dev` でブラウザ起動、以下を手動確認:
 

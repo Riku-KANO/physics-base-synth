@@ -170,7 +170,7 @@ impl Default for Lfo {
 | `test_lfo_triangle_range` | 同上、triangle で min/max ±1 |
 | `test_lfo_zero_at_init` | `process_sample` 初回呼出で sine = 0、triangle = -1 (phase=0、値計算 → phase 進行 の順による厳密性、値計算 → 進行の実装で `assert_eq!` 可能) |
 | `test_lfo_period_matches_rate` | rate=5Hz、48000/5 = 9600 sample 後に phase が 1 周期完了 (phase wrap) |
-| `test_lfo_rate_smoothing` | rate を 1Hz → 8Hz に変更、SmoothedValue tau=0.05s で 50ms 後に 8Hz target 到達 |
+| `test_lfo_rate_smoothing` | rate を 1Hz → 8Hz に変更後、`rate_target() == 8.0` は即時、一次平滑の `current` は tau=0.05s に従い ① 1 tau (50ms) 時点で `1 + 7·(1 − e⁻¹) ≈ 5.42 Hz` 近傍（誤差 ±0.2 Hz）、② 5 tau (250ms) 時点で 7.95 Hz 以上の指数応答期待値を満たす（即時到達 assertion は不可、tau の物理意味に従う） |
 | `test_lfo_waveform_switch_no_click` | sine → triangle 切替時に出力連続性を簡易確認（switch 直後の値と 1 sample 前の値の差 < 0.5） |
 | `test_lfo_no_alloc_in_process` | 1000 サンプル処理で `process_sample` のヒープ確保ゼロ（capacity 不変、Phase 3 D4 維持） |
 | `test_lfo_phase_wraps` | 10 秒走らせて phase が [0, 1) で wrap している（NaN / 無限大なし） |
