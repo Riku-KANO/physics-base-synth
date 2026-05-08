@@ -559,18 +559,26 @@ class PresetStore {
     };
   }
 
-  /** User Preset を保存 */
+  /** User Preset を保存。
+   *  バリデーションは isValidPresetV1 に集約 (空名 / name.length > 64 / 値域外 / NaN /
+   *  Infinity / 不正な instrument / waveform を一括 reject)。
+   *  Store-specific の制約 (Factory 名衝突 / User 上限) は本メソッド内で別途チェック。 */
   save(preset: PresetV1): void {
-    if (preset.name.length === 0) {
-      this.errorMessage = 'Preset name cannot be empty';
+    // 1. Schema-level バリデーション (F42-a/d/f を一括カバー):
+    //    isValidPresetV1 が name.length / 値域 / 有限性 / enum 値を全て検証する。
+    //    重複実装を避けるため、ここで再実装しない。
+    if (!isValidPresetV1(preset)) {
+      this.errorMessage = 'Invalid preset (name length, range, or schema violation)';
       return;
     }
-    // Factory プリセット名との重複を拒否（findByName が Factory 優先のため、
-    // 同名 User を保存しても選択時に Factory が勝ち、削除も Factory 判定でブロックされる）
+    // 2. Store-specific の制約: Factory プリセット名との重複を拒否 (F42-e)。
+    //    findByName が Factory 優先のため、同名 User を保存しても選択時に Factory が勝ち、
+    //    削除も Factory 判定でブロックされる。
     if (this.factoryPresets.some(p => p.name === preset.name)) {
       this.errorMessage = `Cannot use factory preset name: ${preset.name}`;
       return;
     }
+    // 3. Store-specific の制約: User Preset 上限 (D51)
     const existingIdx = this.userPresets.findIndex(p => p.name === preset.name);
     if (existingIdx === -1 && this.userPresets.length >= MAX_USER_PRESETS) {
       this.errorMessage = `Preset slot full (max ${MAX_USER_PRESETS})`;

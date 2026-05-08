@@ -287,7 +287,7 @@ Phase 4a 実装着手前に以下を確認:
   - [ ] `STORAGE_KEY_LIST` の有無に関係なく `STORAGE_KEY_LAST` を読み、`findByName(lastName)` で Factory + User の両方から存在確認
   - [ ] stale な lastName（削除済み User preset / 古いデータ / 存在しない名前）は `'Default'` に fallback
   - [ ] 個別 preset の `isValidPresetV1` バリデーション失敗は console.warn してスキップ（throw しない）
-- [ ] `save()` で値域 / Factory 名衝突 / name.length > 64 を reject する仕様 (F42-d/e/f)
+- [ ] `save()` の冒頭で `isValidPresetV1(preset)` を呼び、schema 違反 (空名 / name.length > 64 / 値域外 / NaN / Infinity / 不正 instrument・waveform、F42-a/d/f) を一括 reject。store-specific の制約 (Factory 名衝突 F42-e、User 上限 32 = D51) は別途チェック。validator が責務を持つ schema レベル拒否と save が責務を持つ store レベル拒否の責務分離を保つ ([06 章 §F42 責務分離](./06-build-and-verify.md#f42--プリセット保存ロードd50--d51))
 - [ ] `pnpm --filter ./web check` がパス
 - [ ] git commit `feat(web): preset-store + factory-presets + preset-schema 実装 (D50, D51)`
 - **検証**: F42-a / F42-b / F42-c / F42-d / F42-e / F42-f (TypeScript レベル) + load() 堅牢性 (LIST 不在 / stale lastName / 個別 preset 不正の各経路)

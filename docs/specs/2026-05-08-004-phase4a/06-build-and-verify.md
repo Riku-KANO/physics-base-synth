@@ -106,14 +106,18 @@ gzip -kc web/build/_app/immutable/assets/wasm_audio.*.wasm | wc -c
 
 **TypeScript レベル** (`pnpm --filter ./web check`):
 
-| サブ項目 | 検証内容 |
-|---|---|
-| F42-a | `isValidPresetV1(getDefaultPreset())` が true |
-| F42-b | `isValidPresetV1({})` が false |
-| F42-c | `isValidPresetV1({version: 2, ...})` が false（未知 version） |
-| F42-d | `isValidPresetV1` が NaN / Infinity / 値域外（damping=2.0、rate=999.0 等）を reject |
-| F42-e | `presetStore.save({ name: 'Default', ... })` が Factory 名衝突で errorMessage を設定し保存しない |
-| F42-f | `isValidPresetV1` が name.length > 64 を reject |
+**責務分離（保守性のため明示）**:
+- **`isValidPresetV1`** (validator) は **schema レベル** の検証のみを担当: 型 / 有限性 (`Number.isFinite`) / 値域 (PARAM_RANGES, LFO_RANGES) / name.length ≤ 64 / 既知 instrument / waveform enum。Schema 違反はすべて `false` を返す。
+- **`PresetStore.save()`** は **store レベル** の制約 (Factory 名衝突 / User 上限 32) を担当し、**冒頭で `isValidPresetV1(preset)` を呼ぶ** ことで schema 違反も合わせて拒否する。これにより重複実装を避け、save も validator も同じ拒否条件を共有する。
+
+| サブ項目 | 検証内容 | 担当層 |
+|---|---|---|
+| F42-a | `isValidPresetV1(getDefaultPreset())` が true | validator |
+| F42-b | `isValidPresetV1({})` が false | validator |
+| F42-c | `isValidPresetV1({version: 2, ...})` が false（未知 version） | validator |
+| F42-d | `isValidPresetV1` が NaN / Infinity / 値域外（damping=2.0、rate=999.0 等）を reject。**`save()` も同条件で reject される**（save が validator を呼ぶため） | validator + save |
+| F42-e | `presetStore.save({ name: 'Default', ... })` が Factory 名衝突で errorMessage を設定し保存しない | save |
+| F42-f | `isValidPresetV1` が name.length > 64 を reject。**`save()` も同条件で reject される**（save が validator を呼ぶため） | validator + save |
 
 **実機確認**:
 - プリセット名 "Test 1" で Save → リロード → User Preset として読み込める
