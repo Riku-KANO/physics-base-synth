@@ -135,6 +135,7 @@ pub struct BodyMode {
 
 pub const STEREO_SPREAD: f32 = 0.05;
 
+#[rustfmt::skip]
 pub const BODY_MODES_L: [BodyMode; 8] = [
     BodyMode { freq: 105.0, q: 30.0, gain: 1.0 },
     BodyMode { freq: 200.0, q: 25.0, gain: 0.8 },
@@ -146,6 +147,7 @@ pub const BODY_MODES_L: [BodyMode; 8] = [
     BodyMode { freq: 2300.0, q: 60.0, gain: 0.15 },
 ];
 
+#[rustfmt::skip]
 pub const BODY_MODES_R: [BodyMode; 8] = [
     BodyMode { freq: 110.25, q: 28.5, gain: 1.05 },
     BodyMode { freq: 190.0, q: 26.25, gain: 0.84 },

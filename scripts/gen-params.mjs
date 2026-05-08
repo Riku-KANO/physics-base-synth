@@ -206,6 +206,8 @@ export function generateRustSource(paramsJson) {
 		lines.push('');
 		lines.push(`pub const STEREO_SPREAD: f32 = ${formatF32(stereoSpread)};`);
 		lines.push('');
+		// rustfmt::skip で 1 行形式を維持し、`pnpm fmt` 後に check:params-sync が drift しないようにする
+		lines.push('#[rustfmt::skip]');
 		lines.push(`pub const BODY_MODES_L: [BodyMode; ${modesL.length}] = [`);
 		for (const m of modesL) {
 			lines.push(
@@ -214,6 +216,7 @@ export function generateRustSource(paramsJson) {
 		}
 		lines.push('];');
 		lines.push('');
+		lines.push('#[rustfmt::skip]');
 		lines.push(`pub const BODY_MODES_R: [BodyMode; ${modesR.length}] = [`);
 		for (const m of modesR) {
 			lines.push(
