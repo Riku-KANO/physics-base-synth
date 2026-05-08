@@ -188,7 +188,11 @@ fn test_modal_body_set_instrument_clears_state() {
 
     // 楽器切替で state がクリアされる
     body.set_instrument(InstrumentKind::Mandolin, SAMPLE_RATE);
-    assert_eq!(body.state_l_z1(0), 0.0, "state must be cleared after set_instrument");
+    assert_eq!(
+        body.state_l_z1(0),
+        0.0,
+        "state must be cleared after set_instrument"
+    );
 
     // クリア後の入力 0 で出力も 0 (denormal flush 許容)
     for _ in 0..100 {

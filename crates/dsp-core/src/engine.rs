@@ -2,8 +2,8 @@ use crate::hold_stack::HoldStack;
 use crate::lfo::{Lfo, LfoDestination, LfoWaveform};
 use crate::modal_body::ModalBodyResonator;
 use crate::params::{
-    InstrumentKind, ParamId, BODY_WET_DEFAULT, OUTPUT_GAIN_DEFAULT, PICK_POSITION_DEFAULT,
-    STEREO_SPREAD_DEFAULT,
+    stereo_spread_for_instrument, InstrumentKind, ParamId, BODY_WET_DEFAULT, OUTPUT_GAIN_DEFAULT,
+    PICK_POSITION_DEFAULT, STEREO_SPREAD_DEFAULT,
 };
 use crate::smoothing::SmoothedValue;
 use crate::soft_clip::soft_clip;
@@ -303,6 +303,19 @@ impl Engine {
         self.voice_state_buffer.as_ptr()
     }
 
+    /// Phase 4a D52 / D53: 楽器プリセット切替。
+    /// 全 voice 即時 release → hold_stack / sustain_state クリア → current_instrument 更新
+    /// → ModalBodyResonator の係数差し替え + state クリア。
+    /// fade-out なしの即時 release は UX で「楽器切替時は音が切れます」を UI で告知 (D53)。
+    pub fn apply_instrument(&mut self, kind: InstrumentKind) {
+        self.pool.all_notes_off();
+        self.hold_stack.clear();
+        self.sustain_state.reset();
+        self.current_instrument = kind;
+        self.stereo_spread = stereo_spread_for_instrument(kind);
+        self.modal_body.set_instrument(kind, self.sample_rate);
+    }
+
     /// Phase 4a D46: LFO レート設定 (0.1〜8.0 Hz、SmoothedValue tau=0.05s で平滑化)。
     pub fn lfo_set_rate(&mut self, hz: f32) {
         self.lfo.set_rate(hz);
@@ -334,6 +347,12 @@ impl Engine {
     #[doc(hidden)]
     pub fn stereo_spread(&self) -> f32 {
         self.stereo_spread
+    }
+
+    /// Phase 4a D52 / D53: ModalBodyResonator への read-only access (テスト用)。
+    #[doc(hidden)]
+    pub fn modal_body(&self) -> &ModalBodyResonator {
+        &self.modal_body
     }
 
     /// Phase 4a D46: LFO への read-only access (テスト用)。
@@ -483,8 +502,9 @@ impl AudioProcessor for Engine {
         self.lfo_volume_depth.set_immediate(LFO_DEPTH_DEFAULT);
         self.current_instrument = InstrumentKind::Default;
         self.stereo_spread = STEREO_SPREAD_DEFAULT;
-        // 注: modal_body の楽器係数差し替えは Step 8 で `modal_body.set_instrument` 経由で実装。
-        // Phase 3 互換のため、Step 5 時点では `modal_body.reset()` (上で実行済) のみで足りる。
+        // Phase 4a D52 / D53: reset で modal_body も Default 楽器係数に戻す。
+        self.modal_body
+            .set_instrument(InstrumentKind::Default, self.sample_rate);
     }
 }
 
