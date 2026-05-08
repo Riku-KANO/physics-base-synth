@@ -1,4 +1,10 @@
-import type { ToWorkletMessage, FromWorkletMessage } from './messages';
+import type {
+	ToWorkletMessage,
+	FromWorkletMessage,
+	LfoWaveformKey,
+	LfoDestinationKey,
+	InstrumentKindKey
+} from './messages';
 
 declare const sampleRate: number;
 declare const registerProcessor: (name: string, processor: new () => AudioWorkletProcessor) => void;
@@ -30,7 +36,34 @@ interface WasmExports {
 	synth_midi_cc: (ptr: number, cc: number, value: number) => void;
 	synth_pitch_bend: (ptr: number, semitones: number) => void;
 	synth_voice_state_ptr: (ptr: number) => number;
+	// Phase 4a 追加 (D45-D52)
+	synth_apply_instrument: (ptr: number, kind: number) => void;
+	synth_lfo_set_rate: (ptr: number, hz: number) => void;
+	synth_lfo_set_waveform: (ptr: number, kind: number) => void;
+	synth_lfo_set_depth: (ptr: number, dest: number, depth: number) => void;
 }
+
+// Phase 4a: 文字列キー → u32 マッピング (Worklet 側で C ABI に変換)。
+const LFO_WAVEFORM_MAP: Record<LfoWaveformKey, number> = {
+	sine: 0,
+	triangle: 1
+};
+
+const LFO_DESTINATION_MAP: Record<LfoDestinationKey, number> = {
+	pitch: 0,
+	brightness: 1,
+	volume: 2
+};
+
+const INSTRUMENT_KIND_MAP: Record<InstrumentKindKey, number> = {
+	default: 0,
+	guitar_classical: 1,
+	ukulele: 2,
+	mandolin: 3,
+	bass: 4,
+	guitar_steel: 5,
+	sitar: 6
+};
 
 const FRAMES = 128;
 const VOICE_STATE_BYTES = 33; // 1 byte mask + 8 voice × f32 (4 bytes)
@@ -82,6 +115,18 @@ class SynthProcessor extends AudioWorkletProcessor {
 				break;
 			case 'pitchBend':
 				this.exports?.synth_pitch_bend(this.handlePtr, msg.semitones);
+				break;
+			case 'lfoSetRate':
+				this.exports?.synth_lfo_set_rate(this.handlePtr, msg.hz);
+				break;
+			case 'lfoSetWaveform':
+				this.exports?.synth_lfo_set_waveform(this.handlePtr, LFO_WAVEFORM_MAP[msg.kind]);
+				break;
+			case 'lfoSetDepth':
+				this.exports?.synth_lfo_set_depth(this.handlePtr, LFO_DESTINATION_MAP[msg.dest], msg.depth);
+				break;
+			case 'applyInstrument':
+				this.exports?.synth_apply_instrument(this.handlePtr, INSTRUMENT_KIND_MAP[msg.kind]);
 				break;
 			case 'reset':
 				this.exports?.synth_reset(this.handlePtr);

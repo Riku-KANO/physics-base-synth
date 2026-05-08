@@ -7,6 +7,18 @@ export {
 	type ParamDescriptor
 } from './generated/params';
 
+// Phase 4a D46-D49 / D52: Worklet との文字列キー (synth-processor 側で u32 へマップ)
+export type LfoWaveformKey = 'sine' | 'triangle';
+export type LfoDestinationKey = 'pitch' | 'brightness' | 'volume';
+export type InstrumentKindKey =
+	| 'default'
+	| 'guitar_classical'
+	| 'ukulele'
+	| 'mandolin'
+	| 'bass'
+	| 'guitar_steel'
+	| 'sitar';
+
 export type ToWorkletMessage =
 	| { type: 'init'; wasmBytes: ArrayBuffer; sampleRate: number }
 	| { type: 'noteOn'; midi: number; velocity: number }
@@ -19,7 +31,12 @@ export type ToWorkletMessage =
 	// Phase 3 D39: Pitch Bend を半音単位 (±2 まで) で送信。
 	| { type: 'pitchBend'; semitones: number }
 	| { type: 'reset' }
-	| { type: 'dispose' };
+	| { type: 'dispose' }
+	// Phase 4a D46-D49 (LFO / Mod Wheel) / D52 (楽器切替)
+	| { type: 'lfoSetRate'; hz: number }
+	| { type: 'lfoSetWaveform'; kind: LfoWaveformKey }
+	| { type: 'lfoSetDepth'; dest: LfoDestinationKey; depth: number }
+	| { type: 'applyInstrument'; kind: InstrumentKindKey };
 
 export type FromWorkletMessage =
 	| { type: 'ready' }
