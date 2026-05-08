@@ -85,6 +85,43 @@ function validateBodyModes(modes) {
 	}
 }
 
+function validateInstruments(instruments) {
+	if (!Array.isArray(instruments)) {
+		throw new Error('instruments must be an array');
+	}
+	if (instruments.length === 0) {
+		throw new Error('instruments must contain at least one entry');
+	}
+	if (instruments[0].kind !== 'Default') {
+		throw new Error(
+			`instruments[0].kind must be "Default" (Phase 3 互換 / kind=0), got ${JSON.stringify(instruments[0].kind)}`
+		);
+	}
+	const seen = new Set();
+	for (let i = 0; i < instruments.length; i++) {
+		const ins = instruments[i];
+		if (typeof ins.kind !== 'string' || !NAME_RE.test(ins.kind)) {
+			throw new Error(
+				`instruments[${i}].kind must match /^[A-Z][A-Za-z0-9]*$/, got ${JSON.stringify(ins.kind)}`
+			);
+		}
+		if (seen.has(ins.kind)) {
+			throw new Error(`instruments[${i}].kind duplicates earlier entry: ${ins.kind}`);
+		}
+		seen.add(ins.kind);
+		if (
+			typeof ins.stereo_spread !== 'number' ||
+			!Number.isFinite(ins.stereo_spread) ||
+			ins.stereo_spread < 0
+		) {
+			throw new Error(
+				`instruments[${i}] (${ins.kind}): stereo_spread must be a non-negative finite number, got ${ins.stereo_spread}`
+			);
+		}
+		validateBodyModes(ins.body_modes);
+	}
+}
+
 /**
  * Phase 3 D32: 左右 ch で freq / q を ±spread% 揺らす純粋関数。
  * 偶数 index は freq +spread / q -spread、奇数 index は freq -spread / q +spread で
@@ -101,15 +138,9 @@ export function applyStereoSpread(modes, spread) {
 export function generateRustSource(paramsJson) {
 	const params = paramsJson.params;
 	validateParams(params);
-	const bodyModes = paramsJson.body_modes ?? null;
-	const stereoSpread = paramsJson.stereo_spread;
-	if (bodyModes !== null) {
-		validateBodyModes(bodyModes);
-		if (typeof stereoSpread !== 'number' || !Number.isFinite(stereoSpread) || stereoSpread < 0) {
-			throw new Error(
-				`stereo_spread must be a non-negative finite number when body_modes is present, got ${stereoSpread}`
-			);
-		}
+	const instruments = paramsJson.instruments ?? null;
+	if (instruments !== null) {
+		validateInstruments(instruments);
 	}
 
 	const lines = [];
@@ -193,10 +224,9 @@ export function generateRustSource(paramsJson) {
 		lines.push('');
 	}
 
-	if (bodyModes !== null) {
-		const modesL = bodyModes;
-		const modesR = applyStereoSpread(bodyModes, stereoSpread);
-		lines.push('// Phase 3 D30 / D32: ModalBodyResonator の係数テーブル');
+	if (instruments !== null) {
+		// Phase 3 D30 / D32 + Phase 4a D52 / D54: ModalBodyResonator の係数テーブル
+		lines.push('// Phase 3 D30 / D32 + Phase 4a D52 / D54: ModalBodyResonator の係数テーブル');
 		lines.push('#[derive(Debug, Clone, Copy)]');
 		lines.push('pub struct BodyMode {');
 		lines.push('    pub freq: f32,');
@@ -204,26 +234,94 @@ export function generateRustSource(paramsJson) {
 		lines.push('    pub gain: f32,');
 		lines.push('}');
 		lines.push('');
-		lines.push(`pub const STEREO_SPREAD: f32 = ${formatF32(stereoSpread)};`);
+
+		// Phase 4a D54: 楽器ごとの STEREO_SPREAD
+		for (const ins of instruments) {
+			const upper = constName(ins.kind);
+			lines.push(`pub const STEREO_SPREAD_${upper}: f32 = ${formatF32(ins.stereo_spread)};`);
+		}
 		lines.push('');
-		// rustfmt::skip で 1 行形式を維持し、`pnpm fmt` 後に check:params-sync が drift しないようにする
-		lines.push('#[rustfmt::skip]');
-		lines.push(`pub const BODY_MODES_L: [BodyMode; ${modesL.length}] = [`);
-		for (const m of modesL) {
+
+		// Phase 4a D52: 楽器ごとの BODY_MODES_<INSTRUMENT>_L/R
+		for (const ins of instruments) {
+			const upper = constName(ins.kind);
+			const modesL = ins.body_modes;
+			const modesR = applyStereoSpread(modesL, ins.stereo_spread);
+
+			lines.push('#[rustfmt::skip]');
+			lines.push(`pub const BODY_MODES_${upper}_L: [BodyMode; ${modesL.length}] = [`);
+			for (const m of modesL) {
+				lines.push(
+					`    BodyMode { freq: ${formatF32(m.freq)}, q: ${formatF32(m.q)}, gain: ${formatF32(m.gain)} },`
+				);
+			}
+			lines.push('];');
+			lines.push('');
+
+			lines.push('#[rustfmt::skip]');
+			lines.push(`pub const BODY_MODES_${upper}_R: [BodyMode; ${modesR.length}] = [`);
+			for (const m of modesR) {
+				lines.push(
+					`    BodyMode { freq: ${formatF32(m.freq)}, q: ${formatF32(m.q)}, gain: ${formatF32(m.gain)} },`
+				);
+			}
+			lines.push('];');
+			lines.push('');
+		}
+
+		// Phase 3 互換 alias: Default kind の係数を旧名で再 export
+		lines.push('// Phase 3 互換: Default kind の alias');
+		lines.push('pub const BODY_MODES_L: [BodyMode; 8] = BODY_MODES_DEFAULT_L;');
+		lines.push('pub const BODY_MODES_R: [BodyMode; 8] = BODY_MODES_DEFAULT_R;');
+		lines.push('pub const STEREO_SPREAD: f32 = STEREO_SPREAD_DEFAULT;');
+		lines.push('');
+
+		// Phase 4a D52: InstrumentKind enum
+		lines.push('#[repr(u32)]');
+		lines.push('#[non_exhaustive]');
+		lines.push('#[derive(Debug, Copy, Clone, Eq, PartialEq)]');
+		lines.push('pub enum InstrumentKind {');
+		for (let i = 0; i < instruments.length; i++) {
+			lines.push(`    ${instruments[i].kind} = ${i},`);
+		}
+		lines.push('}');
+		lines.push('');
+		lines.push('impl InstrumentKind {');
+		lines.push('    pub fn from_u32(value: u32) -> Option<Self> {');
+		lines.push('        match value {');
+		for (let i = 0; i < instruments.length; i++) {
+			lines.push(`            ${i} => Some(Self::${instruments[i].kind}),`);
+		}
+		lines.push('            _ => None,');
+		lines.push('        }');
+		lines.push('    }');
+		lines.push('}');
+		lines.push('');
+		lines.push(`pub const INSTRUMENT_KIND_COUNT: usize = ${instruments.length};`);
+		lines.push('');
+
+		// Phase 4a D52 / D54: ヘルパ関数
+		lines.push('pub fn body_modes_for_instrument(');
+		lines.push('    kind: InstrumentKind,');
+		lines.push(") -> (&'static [BodyMode; 8], &'static [BodyMode; 8]) {");
+		lines.push('    match kind {');
+		for (const ins of instruments) {
+			const upper = constName(ins.kind);
 			lines.push(
-				`    BodyMode { freq: ${formatF32(m.freq)}, q: ${formatF32(m.q)}, gain: ${formatF32(m.gain)} },`
+				`        InstrumentKind::${ins.kind} => (&BODY_MODES_${upper}_L, &BODY_MODES_${upper}_R),`
 			);
 		}
-		lines.push('];');
+		lines.push('    }');
+		lines.push('}');
 		lines.push('');
-		lines.push('#[rustfmt::skip]');
-		lines.push(`pub const BODY_MODES_R: [BodyMode; ${modesR.length}] = [`);
-		for (const m of modesR) {
-			lines.push(
-				`    BodyMode { freq: ${formatF32(m.freq)}, q: ${formatF32(m.q)}, gain: ${formatF32(m.gain)} },`
-			);
+		lines.push('pub fn stereo_spread_for_instrument(kind: InstrumentKind) -> f32 {');
+		lines.push('    match kind {');
+		for (const ins of instruments) {
+			const upper = constName(ins.kind);
+			lines.push(`        InstrumentKind::${ins.kind} => STEREO_SPREAD_${upper},`);
 		}
-		lines.push('];');
+		lines.push('    }');
+		lines.push('}');
 		lines.push('');
 	}
 
@@ -233,15 +331,9 @@ export function generateRustSource(paramsJson) {
 export function generateTsSource(paramsJson) {
 	const params = paramsJson.params;
 	validateParams(params);
-	const bodyModes = paramsJson.body_modes ?? null;
-	const stereoSpread = paramsJson.stereo_spread;
-	if (bodyModes !== null) {
-		validateBodyModes(bodyModes);
-		if (typeof stereoSpread !== 'number' || !Number.isFinite(stereoSpread) || stereoSpread < 0) {
-			throw new Error(
-				`stereo_spread must be a non-negative finite number when body_modes is present, got ${stereoSpread}`
-			);
-		}
+	const instruments = paramsJson.instruments ?? null;
+	if (instruments !== null) {
+		validateInstruments(instruments);
 	}
 
 	const lines = [];
@@ -287,37 +379,64 @@ export function generateTsSource(paramsJson) {
 	lines.push('}');
 	lines.push('');
 
-	if (bodyModes !== null) {
-		const modesL = bodyModes;
-		const modesR = applyStereoSpread(bodyModes, stereoSpread);
-		lines.push('// Phase 3 D30 / D32: ModalBodyResonator の係数テーブル');
+	if (instruments !== null) {
+		lines.push('// Phase 3 D30 / D32 + Phase 4a D52 / D54: ModalBodyResonator の係数テーブル');
 		lines.push('export interface BodyMode {');
 		lines.push('\treadonly freq: number;');
 		lines.push('\treadonly q: number;');
 		lines.push('\treadonly gain: number;');
 		lines.push('}');
 		lines.push('');
-		lines.push(`export const STEREO_SPREAD = ${formatTsNumber(stereoSpread)};`);
-		lines.push('');
-		lines.push('export const BODY_MODES_L: readonly BodyMode[] = [');
-		for (let i = 0; i < modesL.length; i++) {
-			const m = modesL[i];
-			const sep = i < modesL.length - 1 ? ',' : '';
-			lines.push(
-				`\t{ freq: ${formatTsNumber(m.freq)}, q: ${formatTsNumber(m.q)}, gain: ${formatTsNumber(m.gain)} }${sep}`
-			);
+
+		// 楽器ごとの STEREO_SPREAD と BODY_MODES_<INSTRUMENT>_L/R
+		for (const ins of instruments) {
+			const upper = constName(ins.kind);
+			const modesL = ins.body_modes;
+			const modesR = applyStereoSpread(modesL, ins.stereo_spread);
+
+			lines.push(`export const STEREO_SPREAD_${upper} = ${formatTsNumber(ins.stereo_spread)};`);
+			lines.push('');
+			lines.push(`export const BODY_MODES_${upper}_L: readonly BodyMode[] = [`);
+			for (let i = 0; i < modesL.length; i++) {
+				const m = modesL[i];
+				const sep = i < modesL.length - 1 ? ',' : '';
+				lines.push(
+					`\t{ freq: ${formatTsNumber(m.freq)}, q: ${formatTsNumber(m.q)}, gain: ${formatTsNumber(m.gain)} }${sep}`
+				);
+			}
+			lines.push('] as const;');
+			lines.push('');
+			lines.push(`export const BODY_MODES_${upper}_R: readonly BodyMode[] = [`);
+			for (let i = 0; i < modesR.length; i++) {
+				const m = modesR[i];
+				const sep = i < modesR.length - 1 ? ',' : '';
+				lines.push(
+					`\t{ freq: ${formatTsNumber(m.freq)}, q: ${formatTsNumber(m.q)}, gain: ${formatTsNumber(m.gain)} }${sep}`
+				);
+			}
+			lines.push('] as const;');
+			lines.push('');
 		}
-		lines.push('] as const;');
+
+		// Phase 3 互換 alias
+		lines.push('// Phase 3 互換: Default kind の alias');
+		lines.push('export const BODY_MODES_L = BODY_MODES_DEFAULT_L;');
+		lines.push('export const BODY_MODES_R = BODY_MODES_DEFAULT_R;');
+		lines.push('export const STEREO_SPREAD = STEREO_SPREAD_DEFAULT;');
 		lines.push('');
-		lines.push('export const BODY_MODES_R: readonly BodyMode[] = [');
-		for (let i = 0; i < modesR.length; i++) {
-			const m = modesR[i];
-			const sep = i < modesR.length - 1 ? ',' : '';
-			lines.push(
-				`\t{ freq: ${formatTsNumber(m.freq)}, q: ${formatTsNumber(m.q)}, gain: ${formatTsNumber(m.gain)} }${sep}`
-			);
+
+		// Phase 4a D52: InstrumentKind enum
+		lines.push('export const INSTRUMENT_KIND = {');
+		for (let i = 0; i < instruments.length; i++) {
+			const sep = i < instruments.length - 1 ? ',' : '';
+			lines.push(`\t${instruments[i].kind}: ${i}${sep}`);
 		}
-		lines.push('] as const;');
+		lines.push('} as const;');
+		lines.push('');
+		lines.push('export type InstrumentKindKey = keyof typeof INSTRUMENT_KIND;');
+		lines.push('export type InstrumentKindValue = (typeof INSTRUMENT_KIND)[InstrumentKindKey];');
+		lines.push('');
+		lines.push(`export const INSTRUMENT_KIND_COUNT = ${instruments.length};`);
 		lines.push('');
 	}
 

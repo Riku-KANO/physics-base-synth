@@ -125,7 +125,7 @@ pub const BODY_WET_MIN: f32 = BODY_WET_DESCRIPTOR.min;
 pub const BODY_WET_MAX: f32 = BODY_WET_DESCRIPTOR.max;
 pub const BODY_WET_DEFAULT: f32 = BODY_WET_DESCRIPTOR.default;
 
-// Phase 3 D30 / D32: ModalBodyResonator の係数テーブル
+// Phase 3 D30 / D32 + Phase 4a D52 / D54: ModalBodyResonator の係数テーブル
 #[derive(Debug, Clone, Copy)]
 pub struct BodyMode {
     pub freq: f32,
@@ -133,10 +133,16 @@ pub struct BodyMode {
     pub gain: f32,
 }
 
-pub const STEREO_SPREAD: f32 = 0.05;
+pub const STEREO_SPREAD_DEFAULT: f32 = 0.05;
+pub const STEREO_SPREAD_GUITAR_CLASSICAL: f32 = 0.05;
+pub const STEREO_SPREAD_UKULELE: f32 = 0.04;
+pub const STEREO_SPREAD_MANDOLIN: f32 = 0.06;
+pub const STEREO_SPREAD_BASS: f32 = 0.03;
+pub const STEREO_SPREAD_GUITAR_STEEL: f32 = 0.05;
+pub const STEREO_SPREAD_SITAR: f32 = 0.08;
 
 #[rustfmt::skip]
-pub const BODY_MODES_L: [BodyMode; 8] = [
+pub const BODY_MODES_DEFAULT_L: [BodyMode; 8] = [
     BodyMode { freq: 105.0, q: 30.0, gain: 1.0 },
     BodyMode { freq: 200.0, q: 25.0, gain: 0.8 },
     BodyMode { freq: 280.0, q: 20.0, gain: 0.5 },
@@ -148,7 +154,7 @@ pub const BODY_MODES_L: [BodyMode; 8] = [
 ];
 
 #[rustfmt::skip]
-pub const BODY_MODES_R: [BodyMode; 8] = [
+pub const BODY_MODES_DEFAULT_R: [BodyMode; 8] = [
     BodyMode { freq: 110.25, q: 28.5, gain: 1.05 },
     BodyMode { freq: 190.0, q: 26.25, gain: 0.84 },
     BodyMode { freq: 294.0, q: 19.0, gain: 0.525 },
@@ -158,3 +164,208 @@ pub const BODY_MODES_R: [BodyMode; 8] = [
     BodyMode { freq: 1470.0, q: 47.5, gain: 0.21 },
     BodyMode { freq: 2185.0, q: 63.0, gain: 0.1575 },
 ];
+
+#[rustfmt::skip]
+pub const BODY_MODES_GUITAR_CLASSICAL_L: [BodyMode; 8] = [
+    BodyMode { freq: 105.0, q: 30.0, gain: 1.0 },
+    BodyMode { freq: 200.0, q: 25.0, gain: 0.8 },
+    BodyMode { freq: 280.0, q: 20.0, gain: 0.5 },
+    BodyMode { freq: 420.0, q: 35.0, gain: 0.4 },
+    BodyMode { freq: 580.0, q: 40.0, gain: 0.35 },
+    BodyMode { freq: 850.0, q: 45.0, gain: 0.25 },
+    BodyMode { freq: 1400.0, q: 50.0, gain: 0.2 },
+    BodyMode { freq: 2300.0, q: 60.0, gain: 0.15 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_GUITAR_CLASSICAL_R: [BodyMode; 8] = [
+    BodyMode { freq: 110.25, q: 28.5, gain: 1.05 },
+    BodyMode { freq: 190.0, q: 26.25, gain: 0.84 },
+    BodyMode { freq: 294.0, q: 19.0, gain: 0.525 },
+    BodyMode { freq: 399.0, q: 36.75, gain: 0.42 },
+    BodyMode { freq: 609.0, q: 38.0, gain: 0.3675 },
+    BodyMode { freq: 807.5, q: 47.25, gain: 0.2625 },
+    BodyMode { freq: 1470.0, q: 47.5, gain: 0.21 },
+    BodyMode { freq: 2185.0, q: 63.0, gain: 0.1575 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_UKULELE_L: [BodyMode; 8] = [
+    BodyMode { freq: 200.0, q: 18.0, gain: 0.9 },
+    BodyMode { freq: 380.0, q: 20.0, gain: 0.7 },
+    BodyMode { freq: 540.0, q: 22.0, gain: 0.45 },
+    BodyMode { freq: 780.0, q: 28.0, gain: 0.35 },
+    BodyMode { freq: 1100.0, q: 32.0, gain: 0.3 },
+    BodyMode { freq: 1600.0, q: 38.0, gain: 0.22 },
+    BodyMode { freq: 2200.0, q: 42.0, gain: 0.18 },
+    BodyMode { freq: 3100.0, q: 50.0, gain: 0.12 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_UKULELE_R: [BodyMode; 8] = [
+    BodyMode { freq: 208.0, q: 17.28, gain: 0.936 },
+    BodyMode { freq: 364.8, q: 20.8, gain: 0.728 },
+    BodyMode { freq: 561.6, q: 21.12, gain: 0.468 },
+    BodyMode { freq: 748.8, q: 29.12, gain: 0.364 },
+    BodyMode { freq: 1144.0, q: 30.72, gain: 0.312 },
+    BodyMode { freq: 1536.0, q: 39.52, gain: 0.2288 },
+    BodyMode { freq: 2288.0, q: 40.32, gain: 0.1872 },
+    BodyMode { freq: 2976.0, q: 52.0, gain: 0.1248 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_MANDOLIN_L: [BodyMode; 8] = [
+    BodyMode { freq: 145.0, q: 25.0, gain: 0.85 },
+    BodyMode { freq: 260.0, q: 28.0, gain: 0.7 },
+    BodyMode { freq: 410.0, q: 32.0, gain: 0.5 },
+    BodyMode { freq: 620.0, q: 40.0, gain: 0.4 },
+    BodyMode { freq: 920.0, q: 48.0, gain: 0.35 },
+    BodyMode { freq: 1450.0, q: 60.0, gain: 0.3 },
+    BodyMode { freq: 2100.0, q: 70.0, gain: 0.25 },
+    BodyMode { freq: 2900.0, q: 75.0, gain: 0.2 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_MANDOLIN_R: [BodyMode; 8] = [
+    BodyMode { freq: 153.7, q: 23.5, gain: 0.901 },
+    BodyMode { freq: 244.4, q: 29.68, gain: 0.742 },
+    BodyMode { freq: 434.6, q: 30.08, gain: 0.53 },
+    BodyMode { freq: 582.8, q: 42.4, gain: 0.424 },
+    BodyMode { freq: 975.2, q: 45.12, gain: 0.371 },
+    BodyMode { freq: 1363.0, q: 63.6, gain: 0.318 },
+    BodyMode { freq: 2226.0, q: 65.8, gain: 0.265 },
+    BodyMode { freq: 2726.0, q: 79.5, gain: 0.212 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_BASS_L: [BodyMode; 8] = [
+    BodyMode { freq: 60.0, q: 25.0, gain: 1.2 },
+    BodyMode { freq: 120.0, q: 22.0, gain: 0.9 },
+    BodyMode { freq: 195.0, q: 25.0, gain: 0.6 },
+    BodyMode { freq: 290.0, q: 30.0, gain: 0.4 },
+    BodyMode { freq: 420.0, q: 35.0, gain: 0.3 },
+    BodyMode { freq: 650.0, q: 40.0, gain: 0.22 },
+    BodyMode { freq: 980.0, q: 45.0, gain: 0.16 },
+    BodyMode { freq: 1500.0, q: 50.0, gain: 0.1 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_BASS_R: [BodyMode; 8] = [
+    BodyMode { freq: 61.8, q: 24.25, gain: 1.236 },
+    BodyMode { freq: 116.4, q: 22.66, gain: 0.927 },
+    BodyMode { freq: 200.85, q: 24.25, gain: 0.618 },
+    BodyMode { freq: 281.3, q: 30.9, gain: 0.412 },
+    BodyMode { freq: 432.6, q: 33.95, gain: 0.309 },
+    BodyMode { freq: 630.5, q: 41.2, gain: 0.2266 },
+    BodyMode { freq: 1009.4, q: 43.65, gain: 0.1648 },
+    BodyMode { freq: 1455.0, q: 51.5, gain: 0.103 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_GUITAR_STEEL_L: [BodyMode; 8] = [
+    BodyMode { freq: 100.0, q: 32.0, gain: 1.0 },
+    BodyMode { freq: 215.0, q: 28.0, gain: 0.85 },
+    BodyMode { freq: 300.0, q: 22.0, gain: 0.55 },
+    BodyMode { freq: 440.0, q: 38.0, gain: 0.45 },
+    BodyMode { freq: 620.0, q: 42.0, gain: 0.4 },
+    BodyMode { freq: 920.0, q: 48.0, gain: 0.32 },
+    BodyMode { freq: 1500.0, q: 55.0, gain: 0.28 },
+    BodyMode { freq: 2500.0, q: 65.0, gain: 0.22 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_GUITAR_STEEL_R: [BodyMode; 8] = [
+    BodyMode { freq: 105.0, q: 30.4, gain: 1.05 },
+    BodyMode { freq: 204.25, q: 29.4, gain: 0.8925 },
+    BodyMode { freq: 315.0, q: 20.9, gain: 0.5775 },
+    BodyMode { freq: 418.0, q: 39.9, gain: 0.4725 },
+    BodyMode { freq: 651.0, q: 39.9, gain: 0.42 },
+    BodyMode { freq: 874.0, q: 50.4, gain: 0.336 },
+    BodyMode { freq: 1575.0, q: 52.25, gain: 0.294 },
+    BodyMode { freq: 2375.0, q: 68.25, gain: 0.231 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_SITAR_L: [BodyMode; 8] = [
+    BodyMode { freq: 130.0, q: 30.0, gain: 0.7 },
+    BodyMode { freq: 240.0, q: 35.0, gain: 0.6 },
+    BodyMode { freq: 380.0, q: 60.0, gain: 0.5 },
+    BodyMode { freq: 560.0, q: 70.0, gain: 0.45 },
+    BodyMode { freq: 820.0, q: 80.0, gain: 0.4 },
+    BodyMode { freq: 1200.0, q: 90.0, gain: 0.35 },
+    BodyMode { freq: 1750.0, q: 100.0, gain: 0.3 },
+    BodyMode { freq: 2500.0, q: 110.0, gain: 0.25 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_SITAR_R: [BodyMode; 8] = [
+    BodyMode { freq: 140.4, q: 27.6, gain: 0.756 },
+    BodyMode { freq: 220.8, q: 37.8, gain: 0.648 },
+    BodyMode { freq: 410.4, q: 55.2, gain: 0.54 },
+    BodyMode { freq: 515.2, q: 75.6, gain: 0.486 },
+    BodyMode { freq: 885.6, q: 73.6, gain: 0.432 },
+    BodyMode { freq: 1104.0, q: 97.2, gain: 0.378 },
+    BodyMode { freq: 1890.0, q: 92.0, gain: 0.324 },
+    BodyMode { freq: 2300.0, q: 118.8, gain: 0.27 },
+];
+
+// Phase 3 互換: Default kind の alias
+pub const BODY_MODES_L: [BodyMode; 8] = BODY_MODES_DEFAULT_L;
+pub const BODY_MODES_R: [BodyMode; 8] = BODY_MODES_DEFAULT_R;
+pub const STEREO_SPREAD: f32 = STEREO_SPREAD_DEFAULT;
+
+#[repr(u32)]
+#[non_exhaustive]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum InstrumentKind {
+    Default = 0,
+    GuitarClassical = 1,
+    Ukulele = 2,
+    Mandolin = 3,
+    Bass = 4,
+    GuitarSteel = 5,
+    Sitar = 6,
+}
+
+impl InstrumentKind {
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Default),
+            1 => Some(Self::GuitarClassical),
+            2 => Some(Self::Ukulele),
+            3 => Some(Self::Mandolin),
+            4 => Some(Self::Bass),
+            5 => Some(Self::GuitarSteel),
+            6 => Some(Self::Sitar),
+            _ => None,
+        }
+    }
+}
+
+pub const INSTRUMENT_KIND_COUNT: usize = 7;
+
+pub fn body_modes_for_instrument(
+    kind: InstrumentKind,
+) -> (&'static [BodyMode; 8], &'static [BodyMode; 8]) {
+    match kind {
+        InstrumentKind::Default => (&BODY_MODES_DEFAULT_L, &BODY_MODES_DEFAULT_R),
+        InstrumentKind::GuitarClassical => (&BODY_MODES_GUITAR_CLASSICAL_L, &BODY_MODES_GUITAR_CLASSICAL_R),
+        InstrumentKind::Ukulele => (&BODY_MODES_UKULELE_L, &BODY_MODES_UKULELE_R),
+        InstrumentKind::Mandolin => (&BODY_MODES_MANDOLIN_L, &BODY_MODES_MANDOLIN_R),
+        InstrumentKind::Bass => (&BODY_MODES_BASS_L, &BODY_MODES_BASS_R),
+        InstrumentKind::GuitarSteel => (&BODY_MODES_GUITAR_STEEL_L, &BODY_MODES_GUITAR_STEEL_R),
+        InstrumentKind::Sitar => (&BODY_MODES_SITAR_L, &BODY_MODES_SITAR_R),
+    }
+}
+
+pub fn stereo_spread_for_instrument(kind: InstrumentKind) -> f32 {
+    match kind {
+        InstrumentKind::Default => STEREO_SPREAD_DEFAULT,
+        InstrumentKind::GuitarClassical => STEREO_SPREAD_GUITAR_CLASSICAL,
+        InstrumentKind::Ukulele => STEREO_SPREAD_UKULELE,
+        InstrumentKind::Mandolin => STEREO_SPREAD_MANDOLIN,
+        InstrumentKind::Bass => STEREO_SPREAD_BASS,
+        InstrumentKind::GuitarSteel => STEREO_SPREAD_GUITAR_STEEL,
+        InstrumentKind::Sitar => STEREO_SPREAD_SITAR,
+    }
+}
