@@ -13,5 +13,8 @@
     "fmt": "cargo fmt --all && pnpm --filter web format",
     "lint": "cargo clippy --workspace --all-targets -- -D warnings"
   },
-  "packageManager": "pnpm@10.32.1"
+  "packageManager": "pnpm@10.32.1",
+  "devDependencies": {
+    "binaryen": "^129.0.0"
+  }
 }
