@@ -26,20 +26,32 @@ interface WasmExports {
 	synth_capacity: (ptr: number) => number;
 	synth_process_block: (ptr: number, frames: number) => void;
 	synth_set_polyphony_mode: (ptr: number, mode: number) => void;
+	// Phase 3 追加 (D38 / D39 / D41)
+	synth_midi_cc: (ptr: number, cc: number, value: number) => void;
+	synth_pitch_bend: (ptr: number, semitones: number) => void;
+	synth_voice_state_ptr: (ptr: number) => number;
 }
 
 const FRAMES = 128;
+const VOICE_STATE_BYTES = 33; // 1 byte mask + 8 voice × f32 (4 bytes)
+const VOICE_STATE_STRIDE_FRAMES = 1024; // ≈ 21 ms @ 48kHz (D41)
+const NUM_VOICES = 8;
 
 class SynthProcessor extends AudioWorkletProcessor {
 	private exports: WasmExports | null = null;
 	private handlePtr = 0;
 	private lPtr = 0;
 	private rPtr = 0;
+	private voiceStatePtr = 0;
 	private cachedMemBuf: ArrayBuffer | SharedArrayBuffer | null = null;
 	private leftView: Float32Array | null = null;
 	private rightView: Float32Array | null = null;
+	private voiceStateView: Uint8Array | null = null;
+	private voiceStateDataView: DataView | null = null;
+	private readonly voiceStateAmps = new Float32Array(NUM_VOICES);
 	private generation = 0;
 	private warnedFrameLength = false;
+	private framesSinceVoiceStatePush = 0;
 
 	constructor() {
 		super();
@@ -65,6 +77,12 @@ class SynthProcessor extends AudioWorkletProcessor {
 			case 'setMode':
 				this.exports?.synth_set_polyphony_mode(this.handlePtr, msg.mode === 'mono' ? 1 : 0);
 				break;
+			case 'midiCC':
+				this.exports?.synth_midi_cc(this.handlePtr, msg.cc, msg.value);
+				break;
+			case 'pitchBend':
+				this.exports?.synth_pitch_bend(this.handlePtr, msg.semitones);
+				break;
 			case 'reset':
 				this.exports?.synth_reset(this.handlePtr);
 				break;
@@ -82,10 +100,14 @@ class SynthProcessor extends AudioWorkletProcessor {
 		this.handlePtr = 0;
 		this.lPtr = 0;
 		this.rPtr = 0;
+		this.voiceStatePtr = 0;
 		this.cachedMemBuf = null;
 		this.leftView = null;
 		this.rightView = null;
+		this.voiceStateView = null;
+		this.voiceStateDataView = null;
 		this.exports = null;
+		this.framesSinceVoiceStatePush = 0;
 	}
 
 	private async initWasm(bytes: ArrayBuffer, sr: number): Promise<void> {
@@ -107,9 +129,12 @@ class SynthProcessor extends AudioWorkletProcessor {
 
 			const localLPtr = localExports.synth_out_l_ptr(localHandle);
 			const localRPtr = localExports.synth_out_r_ptr(localHandle);
+			const localVsPtr = localExports.synth_voice_state_ptr(localHandle);
 			const memBuf = localExports.memory.buffer;
 			const localLeftView = new Float32Array(memBuf, localLPtr, FRAMES);
 			const localRightView = new Float32Array(memBuf, localRPtr, FRAMES);
+			const localVoiceStateView = new Uint8Array(memBuf, localVsPtr, VOICE_STATE_BYTES);
+			const localVoiceStateDV = new DataView(memBuf, localVsPtr, VOICE_STATE_BYTES);
 
 			if (myGen !== this.generation) {
 				localExports.synth_free(localHandle);
@@ -120,9 +145,12 @@ class SynthProcessor extends AudioWorkletProcessor {
 			this.handlePtr = localHandle;
 			this.lPtr = localLPtr;
 			this.rPtr = localRPtr;
+			this.voiceStatePtr = localVsPtr;
 			this.cachedMemBuf = memBuf;
 			this.leftView = localLeftView;
 			this.rightView = localRightView;
+			this.voiceStateView = localVoiceStateView;
+			this.voiceStateDataView = localVoiceStateDV;
 
 			const ready: FromWorkletMessage = { type: 'ready' };
 			this.port.postMessage(ready);
@@ -146,11 +174,36 @@ class SynthProcessor extends AudioWorkletProcessor {
 		this.cachedMemBuf = memBuf;
 		this.leftView = new Float32Array(memBuf, this.lPtr, FRAMES);
 		this.rightView = new Float32Array(memBuf, this.rPtr, FRAMES);
+		this.voiceStateView = new Uint8Array(memBuf, this.voiceStatePtr, VOICE_STATE_BYTES);
+		this.voiceStateDataView = new DataView(memBuf, this.voiceStatePtr, VOICE_STATE_BYTES);
 	}
 
 	private silence(out: Float32Array[]): void {
 		out[0].fill(0);
 		if (out[1]) out[1].fill(0);
+	}
+
+	private maybePushVoiceState(): void {
+		this.framesSinceVoiceStatePush += FRAMES;
+		if (this.framesSinceVoiceStatePush < VOICE_STATE_STRIDE_FRAMES) return;
+		this.framesSinceVoiceStatePush = 0;
+		if (!this.voiceStateView || !this.voiceStateDataView) return;
+		if (this.voiceStateView.byteLength === 0) {
+			this.refreshViews();
+			if (!this.voiceStateView || !this.voiceStateDataView) return;
+		}
+		const mask = this.voiceStateView[0];
+		const dv = this.voiceStateDataView;
+		const amps = this.voiceStateAmps;
+		for (let i = 0; i < NUM_VOICES; i++) {
+			amps[i] = dv.getFloat32(1 + i * 4, true);
+		}
+		const msg: FromWorkletMessage = {
+			type: 'voiceState',
+			activeMask: mask,
+			amplitudes: amps
+		};
+		this.port.postMessage(msg);
 	}
 
 	process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
@@ -184,11 +237,12 @@ class SynthProcessor extends AudioWorkletProcessor {
 
 		if (this.leftView) out[0].set(this.leftView);
 		if (out[1] && this.rightView) out[1].set(this.rightView);
+
+		this.maybePushVoiceState();
 		return true;
 	}
 }
 
-// 開発時のみコンパイラに sampleRate / registerProcessor を露出するために参照（実行時は no-op）
 void sampleRate;
 
 registerProcessor('synth-processor', SynthProcessor);

@@ -6,6 +6,7 @@ export type MidiNoteMessage =
 
 let access: MIDIAccess | null = null;
 let listener: ((msg: MidiNoteMessage) => void) | null = null;
+let rawListener: ((data: Uint8Array) => void) | null = null;
 let activeInputId: string | null = null;
 
 export async function initMidi(onNote: (msg: MidiNoteMessage) => void): Promise<void> {
@@ -33,7 +34,16 @@ export function disposeMidi(): void {
 	access.onstatechange = null;
 	access = null;
 	listener = null;
+	rawListener = null;
 	activeInputId = null;
+}
+
+/**
+ * Phase 3 D38 / D42: Note 以外の MIDI CC / Pitch Bend を受け取る生バイトリスナー。
+ * `setRawListener(null)` で解除。
+ */
+export function setRawListener(cb: ((data: Uint8Array) => void) | null): void {
+	rawListener = cb;
 }
 
 export function setActiveInput(id: string | null): void {
@@ -41,11 +51,16 @@ export function setActiveInput(id: string | null): void {
 }
 
 function handleMidi(e: MIDIMessageEvent) {
-	if (!listener) return;
 	if (!e.data) return;
 	const port = e.target as MIDIInput | null;
 	if (activeInputId !== null && port?.id !== activeInputId) return;
 
+	// Phase 3 D38: 生バイトを CC / Pitch Bend ハンドラに転送 (Note 以外を処理)
+	if (rawListener) {
+		rawListener(e.data);
+	}
+
+	if (!listener) return;
 	const status = e.data[0];
 	const data1 = e.data[1] ?? 0;
 	const data2 = e.data[2] ?? 0;

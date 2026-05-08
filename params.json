@@ -23,6 +23,33 @@
       "max": 1.5,
       "default": 0.8,
       "smoothing_tau": 0.01
+    },
+    {
+      "id": 3,
+      "name": "PickPosition",
+      "min": 0.05,
+      "max": 0.5,
+      "default": 0.125,
+      "smoothing_tau": 0.05
+    },
+    {
+      "id": 4,
+      "name": "BodyWet",
+      "min": 0.0,
+      "max": 1.0,
+      "default": 0.5,
+      "smoothing_tau": 0.02
     }
-  ]
+  ],
+  "body_modes": [
+    { "freq": 105.0,  "q": 30.0, "gain": 1.0  },
+    { "freq": 200.0,  "q": 25.0, "gain": 0.8  },
+    { "freq": 280.0,  "q": 20.0, "gain": 0.5  },
+    { "freq": 420.0,  "q": 35.0, "gain": 0.4  },
+    { "freq": 580.0,  "q": 40.0, "gain": 0.35 },
+    { "freq": 850.0,  "q": 45.0, "gain": 0.25 },
+    { "freq": 1400.0, "q": 50.0, "gain": 0.2  },
+    { "freq": 2300.0, "q": 60.0, "gain": 0.15 }
+  ],
+  "stereo_spread": 0.05
 }

@@ -122,3 +122,35 @@ pub extern "C" fn synth_set_polyphony_mode(handle: *mut SynthHandle, mode: u32) 
     };
     h.engine.set_mode(synth_mode);
 }
+
+/// Phase 3 D38: MIDI CC dispatch (CC#7 / #64 / #123 のみ対応、その他は no-op)。
+/// `value_normalized ∈ [0, 1]` は呼び元 (JS) で `cc_value / 127.0` で正規化。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_midi_cc(handle: *mut SynthHandle, cc: u8, value_normalized: f32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    h.engine.handle_midi_cc(cc, value_normalized);
+}
+
+/// Phase 3 D38 / D39: Pitch Bend (±2 半音) を全 active voice に fan-out。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_pitch_bend(handle: *mut SynthHandle, semitones: f32) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    h.engine.handle_pitch_bend(semitones);
+}
+
+/// Phase 3 D41: Voice State 共有メモリへのポインタ (33 bytes)。
+/// レイアウト: byte 0 = active mask (8 voice 分の bit)、bytes 1..33 = 8 振幅 × f32 little-endian。
+#[unsafe(no_mangle)]
+pub extern "C" fn synth_voice_state_ptr(handle: *const SynthHandle) -> *const u8 {
+    if handle.is_null() {
+        return core::ptr::null();
+    }
+    let h = unsafe { &*handle };
+    h.engine.voice_state_ptr()
+}

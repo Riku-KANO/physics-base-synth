@@ -17,7 +17,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/specs/<date>-<seq>-<name>/` | イテレーション単位の仕様書群（pre-research + 01〜07）。実装着手前に通読 |
 | `docs/retrospective/<iteration-name>.md` | 各イテレーション完了時の振り返り。次フェーズへの引き継ぎ事項を含む |
 
-現在のイテレーション: `docs/specs/2026-05-06-001-mvp/`（Phase 1 / MVP 完了）。次は Phase 2 候補（polyphony / fractional delay / ParamDescriptor）。詳細は `docs/retrospective/2026-05-06-001-mvp.md`。
+現在のイテレーション: `docs/specs/2026-05-07-003-phase3/`（Phase 3 / Body Resonator + Extended KS + MIDI CC + Voice Meter 完了）。次は Phase 4 候補（プリセット / 多楽器 / Mod Wheel + LFO / Stretching all-pass）。詳細は `docs/retrospective/2026-05-07-003-phase3.md`。
+
+完了済みイテレーション:
+- `docs/specs/2026-05-06-001-mvp/` (Phase 1 / MVP) — 単音 Karplus-Strong、整数ディレイ、A1=55Hz で 2.3% 偏移
+- `docs/specs/2026-05-07-002-phase2/` (Phase 2 / polyphony) — 8 音 polyphony、Lagrange 補間、ParamDescriptor 生成、hold note stack
+- `docs/specs/2026-05-07-003-phase3/` (Phase 3) — Modal Body / loss filter / pick position / Thiran allpass (D36 案 D 採用) / Brightness 補正 / soft clip / Pitch Bend / Sustain / VoiceMeter UI
 
 新イテレーションの振り返りを作る場合は `/retrospective <iteration-name>` カスタムコマンド（`.claude/commands/retrospective.md`）。
 
@@ -62,7 +67,7 @@ Svelte UI (main thread) ──MessagePort──▶ AudioWorkletProcessor
 | wasm-audio | `crates/wasm-audio/src/lib.rs` | C ABI 境界、ポインタ管理、`SynthHandle` 保持 | DSP 本体ロジック |
 | dsp-core | `crates/dsp-core/src/` | Karplus–Strong / SmoothedValue / XorShift32 / Engine | wasm-bindgen 依存、`std::sync::Mutex`、`prepare` 以外でのヒープ確保 |
 
-## 必ず守る制約（Phase 1 で確定済み、Phase 2 でも維持）
+## 必ず守る制約（Phase 1 で確定済み、Phase 2 / Phase 3 でも維持）
 
 - **`process` ホットパス中のヒープ確保ゼロ**: `Engine::prepare` で `KarplusStrong::buffer` と `SynthHandle::scratch_l/r` を一括確保し、以降は `length` フィールドの更新のみ。`Vec::resize` / `Vec::push` を `process_sample` / `note_on` 経路で呼ばない（`test_no_allocation_in_process` で保証）。
 - **C ABI のみ、`wasm-bindgen` 不使用**: 公開関数は `#[unsafe(no_mangle)] pub extern "C" fn`。`wasm-pack` も使わず、`cargo build --target wasm32-unknown-unknown` の生 WASM を `scripts/copy-wasm.mjs` で配置。Worklet 側は `WebAssembly.instantiate(bytes, { env: {} })` で直接呼ぶ。`scripts/check-wasm-exports.mjs` で export 名 drift を検知。

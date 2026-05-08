@@ -1,5 +1,6 @@
-use crate::fractional_delay::LagrangeCoeffs;
-use crate::params::{BRIGHTNESS_DEFAULT, DAMPING_DEFAULT};
+use crate::fractional_delay::ThiranCoeffs;
+use crate::loss_filter::LossFilter;
+use crate::params::{BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, PICK_POSITION_DEFAULT};
 use crate::rng::XorShift32;
 use crate::smoothing::SmoothedValue;
 
@@ -8,8 +9,8 @@ const ENERGY_RISE: f32 = 0.001;
 const ENERGY_DECAY: f32 = 0.999;
 const ENERGY_THRESHOLD: f32 = 1.0e-9;
 const MIN_FREQ_HZ: f32 = 27.5;
-/// Lagrange 4 点参照のため write_index 直後の 2 サンプル分の余裕が必要 (D27)
-const LAGRANGE_BUFFER_MARGIN: usize = 3;
+/// Pitch Bend で length が過剰になったときの境界保護に 1 sample 余裕を残す。
+pub(crate) const FRACTIONAL_DELAY_BUFFER_MARGIN: usize = 1;
 
 pub struct KarplusStrong {
     buffer: Vec<f32>,
@@ -17,9 +18,20 @@ pub struct KarplusStrong {
     /// 整数部のディレイ長
     length_int: usize,
     /// note_on 時にキャッシュした分数部の補間係数 (D26)
-    lagrange: LagrangeCoeffs,
+    thiran: ThiranCoeffs,
+    /// 弦の周波数依存損失 (1+ρ·z⁻¹)/(1+ρ)
+    loss_filter: LossFilter,
+    /// ピック位置 β ∈ [0.05, 0.5]。次回 note_on の励振 shaping で反映
+    pick_position: f32,
     damping: SmoothedValue,
     brightness: SmoothedValue,
+    /// Pitch Bend 適用後の length 目標 (5 ms tau で SmoothedValue)
+    length_target: SmoothedValue,
+    /// process_sample 内の length 再分解 skip 判定用
+    cached_length: f32,
+    /// Pitch Bend 0 のときの adjusted_length (brightness 群遅延補正済み)
+    base_length: f32,
+    pitch_bend_semitones: f32,
     last_filter_out: f32,
     energy: f32,
     active: bool,
@@ -38,9 +50,15 @@ impl KarplusStrong {
             buffer: Vec::new(),
             write_index: 0,
             length_int: 0,
-            lagrange: LagrangeCoeffs::default(),
+            thiran: ThiranCoeffs::new(),
+            loss_filter: LossFilter::new(),
+            pick_position: PICK_POSITION_DEFAULT,
             damping: SmoothedValue::new(DAMPING_DEFAULT),
             brightness: SmoothedValue::new(BRIGHTNESS_DEFAULT),
+            length_target: SmoothedValue::new(0.0),
+            cached_length: 0.0,
+            base_length: 0.0,
+            pitch_bend_semitones: 0.0,
             last_filter_out: 0.0,
             energy: 0.0,
             active: false,
@@ -54,15 +72,21 @@ impl KarplusStrong {
 
     pub fn prepare(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
-        let max_buffer_len = (sample_rate / MIN_FREQ_HZ).ceil() as usize + LAGRANGE_BUFFER_MARGIN;
+        let max_buffer_len =
+            (sample_rate / MIN_FREQ_HZ).ceil() as usize + FRACTIONAL_DELAY_BUFFER_MARGIN;
         self.buffer = vec![0.0; max_buffer_len];
 
         self.damping.set_time_constant(sample_rate, 0.02);
         self.brightness.set_time_constant(sample_rate, 0.02);
+        self.length_target.set_time_constant(sample_rate, 0.005); // Phase 3 D39: 5ms tau
 
         self.write_index = 0;
         self.length_int = 0;
-        self.lagrange = LagrangeCoeffs::default();
+        self.thiran.reset();
+        self.loss_filter.reset();
+        self.cached_length = 0.0;
+        self.base_length = 0.0;
+        self.pitch_bend_semitones = 0.0;
         self.last_filter_out = 0.0;
         self.energy = 0.0;
         self.active = false;
@@ -74,24 +98,61 @@ impl KarplusStrong {
         self.rng = XorShift32::new(seed);
     }
 
-    /// freq_hz から `length_int + length_frac` を計算し、Lagrange 係数をキャッシュする。
-    /// バッファ全体をゼロクリアしてから `[0..length_int]` に励振ノイズを書き、
-    /// `write_index = length_int` から書き込み開始する。これにより初回 process_sample で
-    /// read 位置 (base - d_int) % buf_len = 0 が励振範囲を指し、補間値が非ゼロになる。
+    /// β は [0.05, 0.5] へ clamp。process 中の変更は次回 note_on で反映 (D34)。
+    pub fn set_pick_position(&mut self, beta: f32) {
+        self.pick_position = beta.clamp(0.05, 0.5);
+    }
+
+    /// trait `Voice` 互換用 (note_id 不明、`current_note = None` で励振)。
     pub fn note_on(&mut self, freq_hz: f32, velocity: f32) {
+        self.note_on_internal(None, freq_hz, velocity);
+    }
+
+    /// VoicePool 経由のメイン経路。`current_note = Some(midi_note)` で励振。
+    pub fn note_on_with_id(&mut self, midi_note: u8, freq_hz: f32, velocity: f32) {
+        self.note_on_internal(Some(midi_note), freq_hz, velocity);
+    }
+
+    /// `note_id` を `Option<u8>` で受けるのは `Some(0)` と `None` の取り違えを設計レベルで排除するため。
+    fn note_on_internal(&mut self, note_id: Option<u8>, freq_hz: f32, velocity: f32) {
         let raw_len = self.sample_rate / freq_hz.max(1.0);
-        let max_len = self.buffer.len().saturating_sub(LAGRANGE_BUFFER_MARGIN);
-        let len_int = (raw_len.floor() as usize).clamp(3, max_len);
-        let len_frac = (raw_len - len_int as f32).clamp(0.0, 1.0);
+        let max_len_usize = self
+            .buffer
+            .len()
+            .saturating_sub(FRACTIONAL_DELAY_BUFFER_MARGIN);
+        // Brightness LPF (1 段 IIR) の τ_g(b) = (1-b)/b 群遅延がピッチを下方偏移させる
+        // ため、note_on 時に raw_length から差し引いて補正する (b=0.5 で 1 sample、b=1.0 で 0)。
+        let brightness = self.brightness.target();
+        let tau_g = if brightness > 0.001 {
+            ((1.0 - brightness) / brightness).clamp(0.0, raw_len - 3.0)
+        } else {
+            0.0
+        };
+        let adjusted = (raw_len - tau_g).max(3.0);
+        let len_int = (adjusted.floor() as usize).clamp(3, max_len_usize);
+        let len_frac = (adjusted - len_int as f32).clamp(0.0, 1.0);
 
         self.length_int = len_int;
-        self.lagrange = LagrangeCoeffs::new(len_frac);
+        self.thiran.set_fractional(len_frac);
+        // Thiran は IIR、note_on 連打で前 note の状態を引き継ぐと過渡応答が暴れる。
+        self.thiran.reset();
+        self.loss_filter.set_for_frequency(freq_hz);
 
+        // Pick position 励振 shaping: noise burst を `buffer[i] -= buffer[i - K]` で
+        // in-place comb 整形。K = round(β · length_int)、length_int-1 へ clamp。
         for v in self.buffer.iter_mut() {
             *v = 0.0;
         }
         for i in 0..len_int {
             self.buffer[i] = self.rng.next_unit_bipolar() * velocity;
+        }
+        let k = (self.pick_position * len_int as f32)
+            .round()
+            .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
+        if k > 0 {
+            for i in (k..len_int).rev() {
+                self.buffer[i] -= self.buffer[i - k];
+            }
         }
 
         self.write_index = len_int;
@@ -99,11 +160,38 @@ impl KarplusStrong {
         self.energy = velocity * velocity;
         self.active = true;
         self.age_samples = 0;
+        self.current_note = note_id;
+
+        self.base_length = adjusted;
+        self.pitch_bend_semitones = 0.0;
+        self.length_target.set_immediate(adjusted);
+        self.cached_length = adjusted;
     }
 
-    pub fn note_on_with_id(&mut self, midi_note: u8, freq_hz: f32, velocity: f32) {
-        self.note_on(freq_hz, velocity);
-        self.current_note = Some(midi_note);
+    /// length_target = base_length × 2^(-semitones/12) を 5 ms tau で滑らかに追従 (D39)。
+    pub fn set_pitch_bend(&mut self, semitones: f32) {
+        let clamped = semitones.clamp(-2.0, 2.0);
+        self.pitch_bend_semitones = clamped;
+        if !self.active || self.base_length < 3.0 {
+            return;
+        }
+        let factor = 2.0_f32.powf(-clamped / 12.0);
+        let target = self.base_length * factor;
+        let max_len = (self.buffer.len() - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
+        self.length_target.set_target(target.clamp(3.0, max_len));
+    }
+
+    /// テスト専用: 任意の length_int で励振 (K=0 分岐の到達確認用)。
+    /// 公開 β min は 0.05、length_int=9 + β=0.05 で K=round(0.45)=0 を踏める。
+    #[doc(hidden)]
+    pub fn note_on_with_length_for_test(&mut self, length_int: usize, beta: f32, velocity: f32) {
+        debug_assert!(length_int >= 3);
+        debug_assert!(self.buffer.len() > length_int);
+        let prev_pick = self.pick_position;
+        self.pick_position = beta.clamp(0.0, 1.0); // テスト用に下限緩和
+        let freq = self.sample_rate / length_int as f32;
+        self.note_on_internal(None, freq, velocity);
+        self.pick_position = prev_pick;
     }
 
     pub fn note_off(&mut self) {
@@ -145,13 +233,29 @@ impl KarplusStrong {
         self.damping.target()
     }
 
+    #[doc(hidden)]
+    pub fn buffer_capacity(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// テスト用: 励振直後の buffer の先頭 `length_int` を読む。alloc を含むので production 経路では使わない。
+    #[doc(hidden)]
+    pub fn excitation_snapshot(&self) -> Vec<f32> {
+        self.buffer[..self.length_int].to_vec()
+    }
+
     pub fn reset(&mut self) {
         for v in self.buffer.iter_mut() {
             *v = 0.0;
         }
         self.write_index = 0;
         self.length_int = 0;
-        self.lagrange = LagrangeCoeffs::default();
+        self.thiran.reset();
+        self.loss_filter.reset();
+        self.cached_length = 0.0;
+        self.base_length = 0.0;
+        self.pitch_bend_semitones = 0.0;
+        self.length_target.set_immediate(0.0);
         self.last_filter_out = 0.0;
         self.energy = 0.0;
         self.active = false;
@@ -165,33 +269,33 @@ impl KarplusStrong {
             return 0.0;
         }
 
-        // Lagrange 4 点を時系列順に読む (D27)。剰余を length_int で取ると read_p1/p2 が
-        // リング上の「新しい側」に巻き込まれ、x[n - D_int - 1] / x[n - D_int - 2] を
-        // 取り出せなくなる。buf_len は power-of-two ではないので LLVM は `%` をマスク化
-        // できない — 1 回だけ `%` を使い、隣接位置は分岐デクリメントで導出する。
         let buf_len = self.buffer.len();
-        let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
-        let read_m = if read_z + 1 == buf_len { 0 } else { read_z + 1 };
-        let read_p1 = if read_z == 0 { buf_len - 1 } else { read_z - 1 };
-        let read_p2 = if read_p1 == 0 {
-            buf_len - 1
-        } else {
-            read_p1 - 1
-        };
 
-        let read_value = self.lagrange.apply(
-            self.buffer[read_m],
-            self.buffer[read_z],
-            self.buffer[read_p1],
-            self.buffer[read_p2],
-        );
+        // 定常時は length 再分解と Thiran 係数再計算を skip (差分 < 1e-5)。
+        let new_len = self.length_target.next_sample();
+        if (new_len - self.cached_length).abs() > 1e-5 {
+            let max_len = (buf_len - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
+            let clamped = new_len.clamp(3.0, max_len);
+            self.length_int = clamped as usize;
+            let frac = clamped - self.length_int as f32;
+            self.thiran.set_fractional(frac);
+            self.cached_length = new_len;
+        }
+
+        // Pitch Bend で length_int が動的に変わるため、剰余は `% buf_len` のみ。
+        // `% length_int` だと write/read で異なる剰余系になり buffer の論理長が破綻する。
+        let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
+
+        let read_value = self.thiran.process(self.buffer[read_z]);
 
         let b = self.brightness.next_sample();
         let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
         self.last_filter_out = filtered;
 
+        let loss_out = self.loss_filter.process_sample(filtered);
+
         let d = self.damping.next_sample();
-        let mut damped = d * filtered;
+        let mut damped = d * loss_out;
 
         // denormal flush (D6)
         damped += 1.0e-25;

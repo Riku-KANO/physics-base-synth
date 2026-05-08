@@ -75,6 +75,16 @@ impl<const N: usize> VoicePool<N> {
         }
     }
 
+    /// 全 active voice を一斉 release (CC#123 All Notes Off 用)。
+    /// 128 個の MIDI note を線形検索する代わりに 8 voice を直接 release する。
+    pub fn all_notes_off(&mut self) {
+        for v in self.voices.iter_mut() {
+            if v.is_active() {
+                v.note_off();
+            }
+        }
+    }
+
     /// 全ボイスへ damping を fan-out (Engine::set_param から呼ぶ)。
     pub fn set_damping(&mut self, value: f32) {
         let clamped = ParamId::Damping.descriptor().clamp(value);
@@ -87,6 +97,20 @@ impl<const N: usize> VoicePool<N> {
         let clamped = ParamId::Brightness.descriptor().clamp(value);
         for v in self.voices.iter_mut() {
             v.set_brightness(clamped);
+        }
+    }
+
+    /// 各 voice は内部で `[0.05, 0.5]` に clamp する。次回 note_on で反映 (D34)。
+    pub fn set_pick_position(&mut self, value: f32) {
+        for v in self.voices.iter_mut() {
+            v.set_pick_position(value);
+        }
+    }
+
+    /// 各 voice は内部で `[-2.0, 2.0]` に clamp する (D39)。
+    pub fn set_pitch_bend(&mut self, semitones: f32) {
+        for v in self.voices.iter_mut() {
+            v.set_pitch_bend(semitones);
         }
     }
 

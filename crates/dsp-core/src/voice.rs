@@ -30,4 +30,8 @@ impl Voice for KarplusStrong {
         // RMS-like 推定: energy は x² の指数移動平均なので sqrt が振幅近似
         KarplusStrong::energy(self).sqrt()
     }
+
+    fn set_pitch_bend(&mut self, semitones: f32) {
+        KarplusStrong::set_pitch_bend(self, semitones);
+    }
 }

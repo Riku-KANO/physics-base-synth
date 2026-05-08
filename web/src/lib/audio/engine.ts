@@ -1,6 +1,7 @@
 import { base } from '$app/paths';
 import type { ToWorkletMessage, FromWorkletMessage } from './messages';
 import wasmUrl from '$lib/wasm/wasm_audio.wasm?url';
+import { voiceState } from './voice-state.svelte';
 
 interface ReadyHandlers {
 	resolve: () => void;
@@ -73,20 +74,26 @@ export class SynthEngine {
 			});
 
 			this.node.port.onmessage = (e: MessageEvent<FromWorkletMessage>) => {
+				const data = e.data;
+				if (data.type === 'voiceState') {
+					voiceState.activeMask = data.activeMask;
+					voiceState.amplitudes = data.amplitudes;
+					return;
+				}
 				const h = this._readyHandlers;
-				if (e.data.type === 'debug') {
-					console.warn('[Worklet]', e.data.message);
+				if (data.type === 'debug') {
+					console.warn('[Worklet]', data.message);
 					return;
 				}
 				if (!h) return;
-				if (e.data.type === 'ready' && !h.settled) {
+				if (data.type === 'ready' && !h.settled) {
 					h.markSettled();
 					this.ready = true;
 					h.resolve();
-				} else if (e.data.type === 'error' && !h.settled) {
+				} else if (data.type === 'error' && !h.settled) {
 					h.markSettled();
-					console.error('[Worklet]', e.data.message);
-					h.reject(new Error(e.data.message));
+					console.error('[Worklet]', data.message);
+					h.reject(new Error(data.message));
 				}
 			};
 
@@ -136,11 +143,22 @@ export class SynthEngine {
 	}
 
 	/**
-	 * mono / poly 切替 (D17 / D21)。離散的なイベントなので rAF スロットルせず即時送信する。
+	 * mono / poly 切替 (D17 / D21 / D42)。離散的なイベントなので rAF スロットルせず即時送信する。
 	 */
 	setMode(mode: 'poly' | 'mono'): void {
 		if (!this.ready) return;
 		this.post({ type: 'setMode', mode });
+	}
+
+	sendMidiCc(cc: number, value: number): void {
+		if (!this.ready) return;
+		const normalized = Math.max(0, Math.min(1, value / 127));
+		this.post({ type: 'midiCC', cc, value: normalized });
+	}
+
+	sendPitchBend(semitones: number): void {
+		if (!this.ready) return;
+		this.post({ type: 'pitchBend', semitones });
 	}
 
 	private flushParams(): void {
