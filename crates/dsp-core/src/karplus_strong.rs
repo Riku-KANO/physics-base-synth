@@ -239,8 +239,8 @@ impl KarplusStrong {
     }
 
     /// テスト用: 励振直後の buffer の先頭 `length_int` を読む。alloc を含むので production 経路では使わない。
-    #[doc(hidden)]
-    pub fn excitation_snapshot(&self) -> Vec<f32> {
+    #[cfg(test)]
+    pub(crate) fn excitation_snapshot(&self) -> Vec<f32> {
         self.buffer[..self.length_int].to_vec()
     }
 
@@ -319,5 +319,145 @@ impl KarplusStrong {
 impl Default for KarplusStrong {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod excitation_tests {
+    use super::*;
+
+    const SAMPLE_RATE: f32 = 48_000.0;
+
+    fn fresh(beta: f32) -> KarplusStrong {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        v.set_pick_position(beta);
+        v
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        let sq: f64 = samples.iter().map(|x| (*x as f64).powi(2)).sum();
+        (sq / samples.len() as f64).sqrt() as f32
+    }
+
+    fn autocorr_normalized(samples: &[f32], lag: usize) -> f32 {
+        if lag >= samples.len() {
+            return 0.0;
+        }
+        let mut sum_xy = 0.0_f64;
+        let mut sum_xx = 0.0_f64;
+        for i in 0..samples.len() - lag {
+            sum_xy += samples[i] as f64 * samples[i + lag] as f64;
+            sum_xx += (samples[i] as f64).powi(2);
+        }
+        if sum_xx > 0.0 {
+            (sum_xy / sum_xx) as f32
+        } else {
+            0.0
+        }
+    }
+
+    #[test]
+    fn test_pick_min_beta_minimal_shape() {
+        let mut v_low = fresh(0.05);
+        v_low.note_on(440.0, 0.8);
+        let buf_low = v_low.excitation_snapshot();
+
+        let mut v_high = fresh(0.5);
+        v_high.note_on(440.0, 0.8);
+        let buf_high = v_high.excitation_snapshot();
+
+        let rms_low = rms(&buf_low);
+        let rms_high = rms(&buf_high);
+        println!(
+            "rms_low(β=0.05)={:.4}, rms_high(β=0.5)={:.4}",
+            rms_low, rms_high
+        );
+        assert!(buf_low.len() == buf_high.len());
+        assert!(rms_low > 0.0 && rms_high > 0.0);
+        let mut differs = false;
+        for (a, b) in buf_low.iter().zip(buf_high.iter()) {
+            if (a - b).abs() > 1e-6 {
+                differs = true;
+                break;
+            }
+        }
+        assert!(differs, "β=0.05 vs β=0.5 で励振 buffer が同一");
+    }
+
+    #[test]
+    fn test_pick_position_node_at_beta_half() {
+        let mut v = fresh(0.5);
+        v.note_on(440.0, 0.8);
+        let buf = v.excitation_snapshot();
+        let l = buf.len();
+
+        let mut v_ref = fresh(0.05);
+        v_ref.note_on(440.0, 0.8);
+        let buf_ref = v_ref.excitation_snapshot();
+
+        let k_high = ((0.5 * l as f32).round()).clamp(0.0, (l - 1) as f32) as usize;
+        let ac_at_k = autocorr_normalized(&buf, k_high);
+        let ac_at_k_ref = autocorr_normalized(&buf_ref, k_high);
+        println!(
+            "β=0.5 ac[K={}]={:.4}, β=0.05 ac[K={}]={:.4}",
+            k_high, ac_at_k, k_high, ac_at_k_ref
+        );
+        assert!(
+            ac_at_k < -0.3,
+            "β=0.5 anti-correlation at K should be strong (< -0.3): got {:.4}",
+            ac_at_k
+        );
+        assert!(
+            ac_at_k < ac_at_k_ref,
+            "β=0.5 anti-correlation should be more negative than β=0.05"
+        );
+    }
+
+    #[test]
+    fn test_pick_position_attenuates_kth_harmonic() {
+        for k in 2..=4 {
+            let beta = 1.0 / k as f32;
+            let mut v = fresh(beta);
+            v.note_on(440.0, 0.8);
+            let buf = v.excitation_snapshot();
+            let l = buf.len();
+            let lag = ((beta * l as f32).round()).clamp(0.0, (l - 1) as f32) as usize;
+
+            let mut v_ref = fresh(0.05);
+            v_ref.note_on(440.0, 0.8);
+            let buf_ref = v_ref.excitation_snapshot();
+
+            let ac = autocorr_normalized(&buf, lag);
+            let ac_ref = autocorr_normalized(&buf_ref, lag);
+            println!(
+                "k={} β={:.3} ac[K={}]={:.4} ref={:.4}",
+                k, beta, lag, ac, ac_ref
+            );
+            assert!(
+                ac < ac_ref,
+                "k={}: β=1/k anti-correlation should be more negative than β=0.05: got {:.4} ref={:.4}",
+                k,
+                ac,
+                ac_ref
+            );
+        }
+    }
+
+    #[test]
+    fn test_pick_internal_k_zero_branch() {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        v.set_brightness(1.0);
+        v.note_on_with_length_for_test(9, 0.05, 0.8);
+        assert!(v.is_active());
+        let buf = v.excitation_snapshot();
+        assert_eq!(buf.len(), 9);
+        let max_abs = buf.iter().map(|x| x.abs()).fold(0.0_f32, f32::max);
+        assert!(
+            max_abs > 0.0 && max_abs <= 0.8 + 1e-6,
+            "noise burst out of range: {}",
+            max_abs
+        );
     }
 }
