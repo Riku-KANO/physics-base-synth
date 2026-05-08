@@ -1,5 +1,6 @@
 import { SynthEngine } from '$lib/audio/engine';
 import { PARAM_DESCRIPTORS, PARAM_IDS } from '$lib/audio/messages';
+import type { LfoWaveformKey, InstrumentKindKey } from '$lib/state/preset-schema';
 
 class SynthState {
 	readonly engine = new SynthEngine();
@@ -9,6 +10,16 @@ class SynthState {
 	outputGain = $state(PARAM_DESCRIPTORS[PARAM_IDS.OutputGain].default);
 	pickPosition = $state(PARAM_DESCRIPTORS[PARAM_IDS.PickPosition].default);
 	bodyWet = $state(PARAM_DESCRIPTORS[PARAM_IDS.BodyWet].default);
+	// Phase 4a D49 / F41: Mod Wheel (CC#1) UI 状態 (0..1)。
+	modWheel = $state(0.0);
+	// Phase 4a D46-D48: LFO controls
+	lfoRate = $state(5.0);
+	lfoWaveform = $state<LfoWaveformKey>('sine');
+	lfoPitchDepth = $state(0.0);
+	lfoBrightnessDepth = $state(0.0);
+	lfoVolumeDepth = $state(0.0);
+	// Phase 4a D52: 楽器プリセット選択
+	instrument = $state<InstrumentKindKey>('default');
 }
 
 export const synth = new SynthState();

@@ -154,3 +154,81 @@ fn test_modal_body_reset_clears_state() {
         assert!(r.abs() < 1e-20, "R not zero after reset: {}", r);
     }
 }
+
+// ===== Phase 4a D52 / D53 / F43-a/d: set_instrument のテスト =====
+
+#[test]
+fn test_modal_body_set_instrument_changes_coeffs() {
+    use dsp_core::params::InstrumentKind;
+    let mut body = ModalBodyResonator::new();
+    body.prepare(SAMPLE_RATE);
+    let coeff_default = body.coeff_l_b0(0);
+
+    body.set_instrument(InstrumentKind::Ukulele, SAMPLE_RATE);
+    let coeff_uke = body.coeff_l_b0(0);
+
+    assert!(
+        (coeff_default - coeff_uke).abs() > 1e-6,
+        "set_instrument(Ukulele) should change coeff_l[0].b0: default={coeff_default} ukulele={coeff_uke}"
+    );
+}
+
+#[test]
+fn test_modal_body_set_instrument_clears_state() {
+    use dsp_core::params::InstrumentKind;
+    let mut body = ModalBodyResonator::new();
+    body.prepare(SAMPLE_RATE);
+
+    // active state を蓄積する
+    for _ in 0..1000 {
+        let _ = body.process_sample(0.5);
+    }
+    // state は 0 でない
+    assert!(body.state_l_z1(0).abs() > 1e-12);
+
+    // 楽器切替で state がクリアされる
+    body.set_instrument(InstrumentKind::Mandolin, SAMPLE_RATE);
+    assert_eq!(
+        body.state_l_z1(0),
+        0.0,
+        "state must be cleared after set_instrument"
+    );
+
+    // クリア後の入力 0 で出力も 0 (denormal flush 許容)
+    for _ in 0..100 {
+        let (l, r) = body.process_sample(0.0);
+        assert!(l.abs() < 1e-20, "L not zero after set_instrument: {}", l);
+        assert!(r.abs() < 1e-20, "R not zero after set_instrument: {}", r);
+    }
+}
+
+#[test]
+fn test_modal_body_default_matches_phase3() {
+    // Phase 3 互換性の保証: Default kind の係数が Phase 3 既存値 (BODY_MODES_L/R) と完全一致。
+    use dsp_core::params::InstrumentKind;
+    let mut body_via_prepare = ModalBodyResonator::new();
+    body_via_prepare.prepare(SAMPLE_RATE);
+
+    let mut body_via_set_default = ModalBodyResonator::new();
+    body_via_set_default.prepare(SAMPLE_RATE);
+    body_via_set_default.set_instrument(InstrumentKind::Default, SAMPLE_RATE);
+
+    for i in 0..8 {
+        let l_a = body_via_prepare.coeff_l_b0(i);
+        let l_b = body_via_set_default.coeff_l_b0(i);
+        assert!(
+            (l_a - l_b).abs() < 1e-6,
+            "Default kind coeff_l_b0[{i}] mismatch: prepare={l_a} set_instrument(Default)={l_b}"
+        );
+        let r_a = body_via_prepare.coeff_r_b0(i);
+        let r_b = body_via_set_default.coeff_r_b0(i);
+        assert!(
+            (r_a - r_b).abs() < 1e-6,
+            "Default kind coeff_r_b0[{i}] mismatch: prepare={r_a} set_instrument(Default)={r_b}"
+        );
+    }
+
+    // BODY_MODES_L / BODY_MODES_R (Phase 3 既存名 = Default の alias) も同じであること
+    // (params.rs の `pub const BODY_MODES_L: [BodyMode; 8] = BODY_MODES_DEFAULT_L;` で保証されている)
+    let _ = (BODY_MODES_L, BODY_MODES_R);
+}

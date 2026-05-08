@@ -15,7 +15,9 @@
 //! - ピークゲイン = mode.gain (constant peak gain Q 形)
 //! - −3dB 帯域幅 = freq / Q
 
-use crate::params::{BodyMode, BODY_MODES_L, BODY_MODES_R};
+use crate::params::{
+    body_modes_for_instrument, BodyMode, InstrumentKind, BODY_MODES_L, BODY_MODES_R,
+};
 
 const NUM_MODES: usize = 8;
 
@@ -73,6 +75,39 @@ impl ModalBodyResonator {
             self.states_l[i] = ModeState { z1: 0.0, z2: 0.0 };
             self.states_r[i] = ModeState { z1: 0.0, z2: 0.0 };
         }
+    }
+
+    /// Phase 4a D52 / D53: 楽器切替で Modal 係数を新セットに差し替え、状態クリア。
+    /// `Engine::apply_instrument` から呼ばれる。
+    /// `body_modes_for_instrument(kind)` が返す L/R それぞれの 8 モードを `calc_coeffs` で
+    /// biquad 係数に変換し、`coeffs_l/r` を上書き。`reset()` で z1/z2 状態をクリアする
+    /// (楽器切替で過去の共鳴を引きずらない)。
+    pub fn set_instrument(&mut self, kind: InstrumentKind, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        let (l_modes, r_modes) = body_modes_for_instrument(kind);
+        for i in 0..NUM_MODES {
+            self.coeffs_l[i] = calc_coeffs(l_modes[i], sample_rate);
+            self.coeffs_r[i] = calc_coeffs(r_modes[i], sample_rate);
+        }
+        self.reset();
+    }
+
+    /// テスト用: 指定モードの L 側 biquad 係数 b0 を取得。
+    #[doc(hidden)]
+    pub fn coeff_l_b0(&self, mode_index: usize) -> f32 {
+        self.coeffs_l[mode_index].b0
+    }
+
+    /// テスト用: 指定モードの R 側 biquad 係数 b0 を取得。
+    #[doc(hidden)]
+    pub fn coeff_r_b0(&self, mode_index: usize) -> f32 {
+        self.coeffs_r[mode_index].b0
+    }
+
+    /// テスト用: state の z1 を取得 (state クリア検証用)。
+    #[doc(hidden)]
+    pub fn state_l_z1(&self, mode_index: usize) -> f32 {
+        self.states_l[mode_index].z1
     }
 
     /// 1 サンプル入力に対し左右 2 サンプル出力（並列加算、Direct Form II Transposed）。

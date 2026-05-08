@@ -174,6 +174,49 @@ fn test_engine_process_block_timing() {
     );
 }
 
+/// Phase 4a F46: release ビルドで 8 voice 全 active + Pitch Bend + CC#7 + Mod Wheel = 1.0
+/// + LFO depths 全 1.0 の最悪ケースで process(128 frames) 平均が < 1.7 ms 以内
+/// (Phase 3 1.5 ms + 0.2 ms 余裕)。CI flaky 対策の上限は 2.0 ms。
+#[test]
+#[cfg(not(debug_assertions))]
+fn test_engine_process_block_timing_phase4a() {
+    use dsp_core::lfo::{LfoDestination, LfoWaveform};
+    use std::time::Instant;
+    let mut e = fresh_engine();
+    for i in 0..8 {
+        e.note_on(60 + i, 0.8);
+    }
+    e.handle_pitch_bend(1.0);
+    e.handle_midi_cc(7, 0.8);
+    e.handle_midi_cc(1, 1.0); // Mod Wheel = 1.0
+    e.lfo_set_rate(5.0);
+    e.lfo_set_waveform(LfoWaveform::Sine);
+    e.lfo_set_depth(LfoDestination::Pitch, 1.0);
+    e.lfo_set_depth(LfoDestination::Brightness, 1.0);
+    e.lfo_set_depth(LfoDestination::Volume, 1.0);
+    e.set_param(ParamId::BodyWet as u32, 0.7);
+
+    let mut output_l = vec![0.0_f32; 128];
+    let mut output_r = vec![0.0_f32; 128];
+    const ITERATIONS: u32 = 1000;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        e.process(&mut output_l, &mut output_r);
+    }
+    let elapsed = start.elapsed();
+    let per_block_us = elapsed.as_micros() as f64 / ITERATIONS as f64;
+    let per_block_ms = per_block_us / 1000.0;
+    println!(
+        "F46 (Phase 4a): process_block timing = {:.3} ms / 128 frames (8 voice + LFO + Mod Wheel + Pitch Bend + CC#7)",
+        per_block_ms
+    );
+    assert!(
+        per_block_ms < 2.0,
+        "F46 fail: {:.3} ms >= 2.0 ms (Phase 4a target 1.7 ms, flaky margin 2.0 ms)",
+        per_block_ms
+    );
+}
+
 #[test]
 fn test_engine_voice_state_buffer_format() {
     // Phase 3 D41: 33 byte レイアウト (active mask 1 + 8 voice × f32 4 bytes = 33)。

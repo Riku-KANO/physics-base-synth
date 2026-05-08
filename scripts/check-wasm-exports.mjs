@@ -22,6 +22,11 @@ const REQUIRED = [
   'synth_midi_cc',
   'synth_pitch_bend',
   'synth_voice_state_ptr',
+  // Phase 4a 追加 (D45-D52)
+  'synth_apply_instrument',
+  'synth_lfo_set_rate',
+  'synth_lfo_set_waveform',
+  'synth_lfo_set_depth',
 ];
 
 const bytes = readFileSync(wasmPath);

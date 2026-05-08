@@ -42,6 +42,14 @@ pub struct KarplusStrong {
     current_note: Option<u8>,
     /// 最後の note_on からの経過サンプル数。voice stealing の oldest 判定に使用
     age_samples: u32,
+    /// Phase 4a D48: LFO Pitch factor (Engine 側で `exp2(-semitones/12)` 計算済、毎 sample 更新)。
+    /// `process_sample` で `length_target.next_sample() * lfo_pitch_factor` で動的 length。
+    /// 初期値 1.0 = pitch offset 0 と等価 (Phase 3 互換)。
+    lfo_pitch_factor: f32,
+    /// Phase 4a D48: LFO Brightness offset (毎 sample 更新)。
+    /// `process_sample` で `(brightness + offset).clamp(0, 1)` として適用。
+    /// 初期値 0.0 = brightness offset なし (Phase 3 互換)。
+    lfo_brightness_offset: f32,
 }
 
 impl KarplusStrong {
@@ -67,7 +75,22 @@ impl KarplusStrong {
             note_off_target_damping: NOTE_OFF_DAMPING,
             current_note: None,
             age_samples: 0,
+            lfo_pitch_factor: 1.0,
+            lfo_brightness_offset: 0.0,
         }
+    }
+
+    /// Phase 4a D48: LFO Pitch factor を毎 sample 更新 (VoicePool fan-out 経由)。
+    /// Engine 側で `exp2(-semitones/12)` 計算済の値を受け取る (per voice exp2 を回避)。
+    #[inline(always)]
+    pub fn set_lfo_pitch_factor(&mut self, factor: f32) {
+        self.lfo_pitch_factor = factor;
+    }
+
+    /// Phase 4a D48: LFO Brightness offset を毎 sample 更新 (VoicePool fan-out 経由)。
+    #[inline(always)]
+    pub fn set_lfo_brightness_offset(&mut self, offset: f32) {
+        self.lfo_brightness_offset = offset;
     }
 
     pub fn prepare(&mut self, sample_rate: f32, _max_block_size: usize) {
@@ -239,8 +262,8 @@ impl KarplusStrong {
     }
 
     /// テスト用: 励振直後の buffer の先頭 `length_int` を読む。alloc を含むので production 経路では使わない。
-    #[doc(hidden)]
-    pub fn excitation_snapshot(&self) -> Vec<f32> {
+    #[cfg(test)]
+    pub(crate) fn excitation_snapshot(&self) -> Vec<f32> {
         self.buffer[..self.length_int].to_vec()
     }
 
@@ -261,6 +284,9 @@ impl KarplusStrong {
         self.active = false;
         self.current_note = None;
         self.age_samples = 0;
+        // Phase 4a: LFO 適用値を初期状態へ (Phase 3 互換)
+        self.lfo_pitch_factor = 1.0;
+        self.lfo_brightness_offset = 0.0;
     }
 
     #[inline(always)]
@@ -272,14 +298,16 @@ impl KarplusStrong {
         let buf_len = self.buffer.len();
 
         // 定常時は length 再分解と Thiran 係数再計算を skip (差分 < 1e-5)。
-        let new_len = self.length_target.next_sample();
-        if (new_len - self.cached_length).abs() > 1e-5 {
+        // Phase 4a D48: LFO Pitch factor を実効 length に乗算 (factor は Engine 側で exp2 済)。
+        let base_target = self.length_target.next_sample();
+        let effective_length = base_target * self.lfo_pitch_factor;
+        if (effective_length - self.cached_length).abs() > 1e-5 {
             let max_len = (buf_len - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
-            let clamped = new_len.clamp(3.0, max_len);
+            let clamped = effective_length.clamp(3.0, max_len);
             self.length_int = clamped as usize;
             let frac = clamped - self.length_int as f32;
             self.thiran.set_fractional(frac);
-            self.cached_length = new_len;
+            self.cached_length = effective_length;
         }
 
         // Pitch Bend で length_int が動的に変わるため、剰余は `% buf_len` のみ。
@@ -288,7 +316,8 @@ impl KarplusStrong {
 
         let read_value = self.thiran.process(self.buffer[read_z]);
 
-        let b = self.brightness.next_sample();
+        // Phase 4a D48: brightness LPF に LFO offset を加算してから clamp。
+        let b = (self.brightness.next_sample() + self.lfo_brightness_offset).clamp(0.0, 1.0);
         let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
         self.last_filter_out = filtered;
 
@@ -319,5 +348,145 @@ impl KarplusStrong {
 impl Default for KarplusStrong {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod excitation_tests {
+    use super::*;
+
+    const SAMPLE_RATE: f32 = 48_000.0;
+
+    fn fresh(beta: f32) -> KarplusStrong {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        v.set_pick_position(beta);
+        v
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        let sq: f64 = samples.iter().map(|x| (*x as f64).powi(2)).sum();
+        (sq / samples.len() as f64).sqrt() as f32
+    }
+
+    fn autocorr_normalized(samples: &[f32], lag: usize) -> f32 {
+        if lag >= samples.len() {
+            return 0.0;
+        }
+        let mut sum_xy = 0.0_f64;
+        let mut sum_xx = 0.0_f64;
+        for i in 0..samples.len() - lag {
+            sum_xy += samples[i] as f64 * samples[i + lag] as f64;
+            sum_xx += (samples[i] as f64).powi(2);
+        }
+        if sum_xx > 0.0 {
+            (sum_xy / sum_xx) as f32
+        } else {
+            0.0
+        }
+    }
+
+    #[test]
+    fn test_pick_min_beta_minimal_shape() {
+        let mut v_low = fresh(0.05);
+        v_low.note_on(440.0, 0.8);
+        let buf_low = v_low.excitation_snapshot();
+
+        let mut v_high = fresh(0.5);
+        v_high.note_on(440.0, 0.8);
+        let buf_high = v_high.excitation_snapshot();
+
+        let rms_low = rms(&buf_low);
+        let rms_high = rms(&buf_high);
+        println!(
+            "rms_low(β=0.05)={:.4}, rms_high(β=0.5)={:.4}",
+            rms_low, rms_high
+        );
+        assert!(buf_low.len() == buf_high.len());
+        assert!(rms_low > 0.0 && rms_high > 0.0);
+        let mut differs = false;
+        for (a, b) in buf_low.iter().zip(buf_high.iter()) {
+            if (a - b).abs() > 1e-6 {
+                differs = true;
+                break;
+            }
+        }
+        assert!(differs, "β=0.05 vs β=0.5 で励振 buffer が同一");
+    }
+
+    #[test]
+    fn test_pick_position_node_at_beta_half() {
+        let mut v = fresh(0.5);
+        v.note_on(440.0, 0.8);
+        let buf = v.excitation_snapshot();
+        let l = buf.len();
+
+        let mut v_ref = fresh(0.05);
+        v_ref.note_on(440.0, 0.8);
+        let buf_ref = v_ref.excitation_snapshot();
+
+        let k_high = ((0.5 * l as f32).round()).clamp(0.0, (l - 1) as f32) as usize;
+        let ac_at_k = autocorr_normalized(&buf, k_high);
+        let ac_at_k_ref = autocorr_normalized(&buf_ref, k_high);
+        println!(
+            "β=0.5 ac[K={}]={:.4}, β=0.05 ac[K={}]={:.4}",
+            k_high, ac_at_k, k_high, ac_at_k_ref
+        );
+        assert!(
+            ac_at_k < -0.3,
+            "β=0.5 anti-correlation at K should be strong (< -0.3): got {:.4}",
+            ac_at_k
+        );
+        assert!(
+            ac_at_k < ac_at_k_ref,
+            "β=0.5 anti-correlation should be more negative than β=0.05"
+        );
+    }
+
+    #[test]
+    fn test_pick_position_attenuates_kth_harmonic() {
+        for k in 2..=4 {
+            let beta = 1.0 / k as f32;
+            let mut v = fresh(beta);
+            v.note_on(440.0, 0.8);
+            let buf = v.excitation_snapshot();
+            let l = buf.len();
+            let lag = ((beta * l as f32).round()).clamp(0.0, (l - 1) as f32) as usize;
+
+            let mut v_ref = fresh(0.05);
+            v_ref.note_on(440.0, 0.8);
+            let buf_ref = v_ref.excitation_snapshot();
+
+            let ac = autocorr_normalized(&buf, lag);
+            let ac_ref = autocorr_normalized(&buf_ref, lag);
+            println!(
+                "k={} β={:.3} ac[K={}]={:.4} ref={:.4}",
+                k, beta, lag, ac, ac_ref
+            );
+            assert!(
+                ac < ac_ref,
+                "k={}: β=1/k anti-correlation should be more negative than β=0.05: got {:.4} ref={:.4}",
+                k,
+                ac,
+                ac_ref
+            );
+        }
+    }
+
+    #[test]
+    fn test_pick_internal_k_zero_branch() {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        v.set_brightness(1.0);
+        v.note_on_with_length_for_test(9, 0.05, 0.8);
+        assert!(v.is_active());
+        let buf = v.excitation_snapshot();
+        assert_eq!(buf.len(), 9);
+        let max_abs = buf.iter().map(|x| x.abs()).fold(0.0_f32, f32::max);
+        assert!(
+            max_abs > 0.0 && max_abs <= 0.8 + 1e-6,
+            "noise burst out of range: {}",
+            max_abs
+        );
     }
 }

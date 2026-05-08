@@ -154,9 +154,9 @@ fn test_engine_mode_switch_no_pending_passes_through() {
 
 #[test]
 fn test_engine_midi_cc_unknown_ignored() {
-    // 未対応 CC (#1 Mod Wheel 等) は no-op (panic / alloc なし)
+    // 未対応 CC は no-op (panic / alloc なし)。
+    // Phase 4a D49 で CC#1 (Mod Wheel) は no-op から実装済へ移行。
     let mut e = fresh_engine();
-    e.handle_midi_cc(1, 0.5);
     e.handle_midi_cc(2, 0.5);
     e.handle_midi_cc(11, 0.5);
     e.handle_midi_cc(127, 0.5);
@@ -166,4 +166,41 @@ fn test_engine_midi_cc_unknown_ignored() {
     let mut r = vec![0.0_f32; 128];
     e.process(&mut l, &mut r);
     assert!(l.iter().all(|s| s.is_finite()));
+}
+
+#[test]
+fn test_midi_cc_mod_wheel_sets_target() {
+    // Phase 4a D49 / F41: CC#1 で mod_wheel.target() が更新される
+    let mut e = fresh_engine();
+    e.handle_midi_cc(1, 0.5);
+    assert!(
+        (e.mod_wheel_target() - 0.5).abs() < 1e-6,
+        "CC#1 = 0.5 should set mod_wheel target to 0.5"
+    );
+    e.handle_midi_cc(1, 1.0);
+    assert!(
+        (e.mod_wheel_target() - 1.0).abs() < 1e-6,
+        "CC#1 = 1.0 should set mod_wheel target to 1.0"
+    );
+    e.handle_midi_cc(1, 0.0);
+    assert!(
+        e.mod_wheel_target().abs() < 1e-6,
+        "CC#1 = 0.0 should set mod_wheel target to 0.0"
+    );
+}
+
+#[test]
+fn test_midi_cc_mod_wheel_clamps_to_range() {
+    // Phase 4a F41-b: CC#1 値が [0, 1] 範囲外でも 0..1 に clamp される (handle_midi_cc 入口で clamp)
+    let mut e = fresh_engine();
+    e.handle_midi_cc(1, 1.5);
+    assert!(
+        (e.mod_wheel_target() - 1.0).abs() < 1e-6,
+        "CC#1 = 1.5 should clamp to 1.0"
+    );
+    e.handle_midi_cc(1, -0.5);
+    assert!(
+        e.mod_wheel_target().abs() < 1e-6,
+        "CC#1 = -0.5 should clamp to 0.0"
+    );
 }
