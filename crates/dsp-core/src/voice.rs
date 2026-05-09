@@ -42,4 +42,8 @@ impl Voice for KarplusStrong {
     fn set_lfo_brightness_offset(&mut self, offset: f32) {
         KarplusStrong::set_lfo_brightness_offset(self, offset);
     }
+
+    fn set_dispersion_active(&mut self, active: bool) {
+        KarplusStrong::set_dispersion_active(self, active);
+    }
 }

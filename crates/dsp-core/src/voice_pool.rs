@@ -132,6 +132,14 @@ impl<const N: usize> VoicePool<N> {
         }
     }
 
+    /// Phase 4b D67: 楽器切替で全 voice に dispersion_active を fan-out。
+    /// `Engine::apply_instrument(Piano)` で true、他 7 楽器で false。
+    pub fn set_dispersion_active(&mut self, active: bool) {
+        for v in self.voices.iter_mut() {
+            v.set_dispersion_active(active);
+        }
+    }
+
     pub fn reset(&mut self) {
         for v in self.voices.iter_mut() {
             v.reset();
