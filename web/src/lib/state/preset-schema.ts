@@ -33,7 +33,8 @@ const VALID_INSTRUMENTS: InstrumentKindKey[] = [
 	'mandolin',
 	'bass',
 	'guitar_steel',
-	'sitar'
+	'sitar',
+	'piano' // Phase 4b D62
 ];
 const VALID_WAVEFORMS: LfoWaveformKey[] = ['sine', 'triangle'];
 

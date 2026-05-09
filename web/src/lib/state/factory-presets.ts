@@ -73,5 +73,20 @@ export const FACTORY_PRESETS: PresetV1[] = [
 			bodyWet: 0.7
 		},
 		lfo: { rate: 5.5, waveform: 'sine', pitchDepth: 0.4, brightnessDepth: 0.0, volumeDepth: 0.0 }
+	},
+	{
+		// Phase 4b D62: Piano (Stretching all-pass + Hammer model + Modal Body Piano)
+		version: 1,
+		name: 'Piano',
+		createdAt: '2026-05-09T00:00:00.000Z',
+		instrument: 'piano',
+		params: {
+			damping: 0.998,
+			brightness: 0.55,
+			outputGain: 0.7,
+			pickPosition: 0.13,
+			bodyWet: 0.4
+		},
+		lfo: { rate: 5.0, waveform: 'sine', pitchDepth: 0.0, brightnessDepth: 0.0, volumeDepth: 0.0 }
 	}
 ];
