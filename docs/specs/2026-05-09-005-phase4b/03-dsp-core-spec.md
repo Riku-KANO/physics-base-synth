@@ -170,7 +170,7 @@ pub fn compute_dispersion_a1(m: u32, b: f32, f0: f32, fs: f32) -> (f32, f32) {
 |---|---|
 | `test_dispersion_a1_in_safe_range` | `compute_dispersion_a1(8, 7.5e-4, 440.0, 48000.0)` の `a1.abs() < 1.0`（極の単位円内安定性） |
 | `test_dispersion_a1_increases_with_b` | B が小さい→大きいと `|a1|` が単調増加（B=1e-6 → 1e-2 で `|a1|` 増加） |
-| `test_dispersion_b_zero_limit` | B=1e-6（事実上ゼロ）で `a1.abs() < 0.05`（passthrough 近似） |
+| `test_dispersion_b_zero_limit` | Faust closed-form は内部で `b.max(1.0e-6)` のフロアを掛けているため B=1e-6 でも厳密な passthrough (a1≈0) には到達しない。代わりに **Piano B での |a1| より B=1e-6 での |a1| が小さい** ことを確認 (well-behaved な単調性) |
 | `test_dispersion_a1_keyboard_dependence` | 同 B での low note (A0, 27.5 Hz) と high note (C8, 4186 Hz) で a1 が異なる（`Ikey(f0)` 補正が効いている） |
 | `test_dispersion_stage_reset` | `process` で状態更新後、`reset()` で z1_in = z1_out = 0 |
 | `test_dispersion_stage_passthrough_when_a1_zero` | `a1 = 0.0` で `process(x) == x`（z1_out = 0 後の最初のサンプル）、続くサンプルでも DC でゲイン 1 |

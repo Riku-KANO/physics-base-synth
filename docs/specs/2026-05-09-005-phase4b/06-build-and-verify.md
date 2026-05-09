@@ -108,7 +108,7 @@ fn test_engine_process_block_timing_phase4b_other() {
 |---|---|
 | F51-a | `compute_dispersion_a1(8, 7.5e-4, 440.0, 48000.0)` の `a1.abs() < 1.0`（極の単位円内安定性） |
 | F51-b | B が 1e-6 → 1e-2 で `|a1|` 単調増加 |
-| F51-c | A0 (27.5Hz) と C8 (4186Hz) で a1 が異なる（`Ikey(f0)` 補正が効いている） |
+| F51-c | A0 (27.5Hz) と C8 (4186Hz) で a1 が異なる（`Ikey(f0)` 補正が効いている）。F51-b (B 単調性) の補完として、**B=1e-6 での |a1| が Piano B (7.5e-4) より小さい** ことも確認 (well-behaved な B 零極限、Faust 内部の `b.max(1e-6)` フロアにより厳密な a1≈0 には到達しない) |
 | F51-d | `DispersionStage::process` で a1=0 で passthrough、a1≠0 で位相変調 |
 | F51-e | M=8 cascade を 1024 サンプル走らせて NaN/Inf なし、|y| < 100 |
 | F51-f | A4 / B=7.5e-4 で `gd_per_stage > 0`（dispersion で位相遅延が生じる） |

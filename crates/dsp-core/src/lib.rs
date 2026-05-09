@@ -1,3 +1,4 @@
+pub mod dispersion;
 pub mod engine;
 pub mod fractional_delay;
 pub mod hold_stack;
@@ -14,3 +15,5 @@ pub mod sustain_state;
 pub mod traits;
 pub mod voice;
 pub mod voice_pool;
+
+pub use dispersion::{compute_dispersion_a1, DispersionStage, DISPERSION_STAGES};
