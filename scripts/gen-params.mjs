@@ -119,6 +119,26 @@ function validateInstruments(instruments) {
 			);
 		}
 		validateBodyModes(ins.body_modes);
+		// Phase 4b D62: Piano kind は inharmonicity_b / hammer_cutoff_low_hz / hammer_cutoff_high_hz を必須とする。
+		// Default〜Sitar (0-6) にこれらのフィールドが付与されるのは将来の Phase 4c で複数 Piano 機種が
+		// 出てきた場合を想定するが、Phase 4b では Piano kind 限定で扱い、付与されていれば検証して通す。
+		if (ins.kind === 'Piano') {
+			if (typeof ins.inharmonicity_b !== 'number' || !Number.isFinite(ins.inharmonicity_b) || ins.inharmonicity_b <= 0) {
+				throw new Error(
+					`instruments[${i}] (Piano): inharmonicity_b must be a positive finite number, got ${ins.inharmonicity_b}`
+				);
+			}
+			if (typeof ins.hammer_cutoff_low_hz !== 'number' || !Number.isFinite(ins.hammer_cutoff_low_hz) || ins.hammer_cutoff_low_hz <= 0) {
+				throw new Error(
+					`instruments[${i}] (Piano): hammer_cutoff_low_hz must be a positive finite number, got ${ins.hammer_cutoff_low_hz}`
+				);
+			}
+			if (typeof ins.hammer_cutoff_high_hz !== 'number' || !Number.isFinite(ins.hammer_cutoff_high_hz) || ins.hammer_cutoff_high_hz <= ins.hammer_cutoff_low_hz) {
+				throw new Error(
+					`instruments[${i}] (Piano): hammer_cutoff_high_hz must be greater than hammer_cutoff_low_hz, got high=${ins.hammer_cutoff_high_hz}, low=${ins.hammer_cutoff_low_hz}`
+				);
+			}
+		}
 	}
 }
 
@@ -304,6 +324,17 @@ export function generateRustSource(paramsJson) {
 		lines.push(`pub const INSTRUMENT_KIND_COUNT: usize = ${instruments.length};`);
 		lines.push('');
 
+		// Phase 4b D58 / D61 / D62: Piano 専用フィールド (Piano kind のみ持つ)。
+		// Phase 4b では Piano 1 機種なので const として出力。複数 Piano 機種を扱う Phase 4c で
+		// 楽器ごとの固有値を保持する設計に切り替える想定。
+		const piano = instruments.find((i) => i.kind === 'Piano');
+		if (piano) {
+			lines.push(`pub const INHARMONICITY_B_PIANO: f32 = ${formatF32(piano.inharmonicity_b)};`);
+			lines.push(`pub const HAMMER_CUTOFF_LOW_PIANO: f32 = ${formatF32(piano.hammer_cutoff_low_hz)};`);
+			lines.push(`pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = ${formatF32(piano.hammer_cutoff_high_hz)};`);
+			lines.push('');
+		}
+
 		// Phase 4a D52 / D54: ヘルパ関数
 		// 1 行で 100 chars 超の match arm (例: GuitarClassical / GuitarSteel) は rustfmt が
 		// 4 行に展開し、短い arm は 1 行で残すため、単純な generator 出力では行ごとに
@@ -447,6 +478,16 @@ export function generateTsSource(paramsJson) {
 		lines.push('');
 		lines.push(`export const INSTRUMENT_KIND_COUNT = ${instruments.length};`);
 		lines.push('');
+
+		// Phase 4b D58 / D61 / D62: Piano 専用フィールド (TS 側にも出力、UI で参照する用途、
+		// drift 防止)。Phase 4b では Piano UI スライダーは未実装、Phase 4c で追加予定。
+		const piano = instruments.find((i) => i.kind === 'Piano');
+		if (piano) {
+			lines.push(`export const INHARMONICITY_B_PIANO = ${formatTsNumber(piano.inharmonicity_b)};`);
+			lines.push(`export const HAMMER_CUTOFF_LOW_PIANO = ${formatTsNumber(piano.hammer_cutoff_low_hz)};`);
+			lines.push(`export const HAMMER_CUTOFF_HIGH_PIANO = ${formatTsNumber(piano.hammer_cutoff_high_hz)};`);
+			lines.push('');
+		}
 	}
 
 	return lines.join('\n');
