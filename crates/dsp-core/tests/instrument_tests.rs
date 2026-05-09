@@ -159,6 +159,87 @@ fn test_stereo_spread_per_instrument() {
     assert!((stereo_spread_for_instrument(InstrumentKind::Sitar) - 0.08).abs() < 1e-6);
 }
 
+// ===== Phase 4b D67 / F54: apply_instrument で dispersion_active を fan-out =====
+
+#[test]
+fn test_apply_instrument_piano_enables_dispersion() {
+    let mut e = fresh_engine();
+    e.apply_instrument(InstrumentKind::Piano);
+    let pool = e.pool();
+    for i in 0..8 {
+        let v = pool.voice(i).expect("voice exists");
+        assert!(
+            v.dispersion_active(),
+            "voice {i} should have dispersion_active=true after apply_instrument(Piano)"
+        );
+    }
+}
+
+#[test]
+fn test_apply_instrument_default_disables_dispersion() {
+    let mut e = fresh_engine();
+    // Piano を一度有効にしてから Default に戻す
+    e.apply_instrument(InstrumentKind::Piano);
+    e.apply_instrument(InstrumentKind::Default);
+    let pool = e.pool();
+    for i in 0..8 {
+        let v = pool.voice(i).expect("voice exists");
+        assert!(
+            !v.dispersion_active(),
+            "voice {i} should have dispersion_active=false after apply_instrument(Default)"
+        );
+    }
+}
+
+#[test]
+fn test_apply_instrument_other_kinds_disable_dispersion() {
+    // Piano 以外のすべての楽器で dispersion_active = false
+    let mut e = fresh_engine();
+    let kinds = [
+        InstrumentKind::Default,
+        InstrumentKind::GuitarClassical,
+        InstrumentKind::Ukulele,
+        InstrumentKind::Mandolin,
+        InstrumentKind::Bass,
+        InstrumentKind::GuitarSteel,
+        InstrumentKind::Sitar,
+    ];
+    for kind in kinds {
+        e.apply_instrument(InstrumentKind::Piano);
+        e.apply_instrument(kind);
+        let pool = e.pool();
+        for i in 0..8 {
+            assert!(
+                !pool.voice(i).unwrap().dispersion_active(),
+                "{kind:?} should disable dispersion on voice {i}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_apply_instrument_piano_no_alloc() {
+    // apply_instrument(Piano) を 100 連打で voice buffer / dispersion_stages 容量不変。
+    // dispersion_stages は inline 配列なので heap 操作なし、buffer も Phase 1 で確保済み。
+    let mut e = fresh_engine();
+    let cap_before: Vec<usize> = (0..8)
+        .map(|i| e.pool().voice(i).map(|v| v.buffer_capacity()).unwrap_or(0))
+        .collect();
+
+    for _ in 0..50 {
+        e.apply_instrument(InstrumentKind::Piano);
+        e.apply_instrument(InstrumentKind::Default);
+    }
+
+    let cap_after: Vec<usize> = (0..8)
+        .map(|i| e.pool().voice(i).map(|v| v.buffer_capacity()).unwrap_or(0))
+        .collect();
+    assert_eq!(
+        cap_before, cap_after,
+        "voice buffer capacity unchanged across 100 Piano↔Default toggles"
+    );
+}
+
 // ===== Phase 4b D62 / F53-c/d/e: Piano kind の Engine 経由動作確認 =====
 
 #[test]
