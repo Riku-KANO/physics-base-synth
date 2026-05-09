@@ -202,6 +202,29 @@ fn test_modal_body_set_instrument_clears_state() {
     }
 }
 
+// ===== Phase 4b D62 / F53-a/b: Piano Modal 係数のテスト =====
+
+#[test]
+fn test_piano_modal_first_mode_at_55hz() {
+    use dsp_core::params::BODY_MODES_PIANO_L;
+    // Conklin 1996 grand piano soundboard 第 1 モード (49〜60 Hz) ベースで 55 Hz を採用
+    assert!(
+        (BODY_MODES_PIANO_L[0].freq - 55.0).abs() < 1e-6,
+        "Piano body mode 1 should be 55 Hz, got {}",
+        BODY_MODES_PIANO_L[0].freq
+    );
+}
+
+#[test]
+fn test_piano_stereo_spread_default() {
+    use dsp_core::params::STEREO_SPREAD_PIANO;
+    assert!(
+        (STEREO_SPREAD_PIANO - 0.05).abs() < 1e-6,
+        "Piano stereo_spread should be 0.05, got {}",
+        STEREO_SPREAD_PIANO
+    );
+}
+
 #[test]
 fn test_modal_body_default_matches_phase3() {
     // Phase 3 互換性の保証: Default kind の係数が Phase 3 既存値 (BODY_MODES_L/R) と完全一致。
