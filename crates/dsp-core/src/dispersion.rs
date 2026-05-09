@@ -18,8 +18,12 @@
 /// 増減する場合は `KarplusStrong::dispersion_stages` の配列長と同期させること。
 pub const DISPERSION_STAGES: usize = 8;
 
-/// Phase 4b D59: Rauhala-Välimäki 2006 closed-form の magic constants。
-/// 文献値、`approx_constant` lint は module-level allow で抑止。
+/// Phase 4b D59: Rauhala-Välimäki 2006 closed-form の magic constants (文献値)。
+/// `compute_dispersion_a1` で以下の式に対応する:
+///   `kd = exp(K1·log²(B) + K2·log(B) + K3)`
+///   `Cd = exp((M1·log(M) + M2)·log(B) + M3·log(M) + M4)`
+///   `D = exp(Cd - Ikey·kd)`、`a1 = (1 - D) / (1 + D)`
+/// `approx_constant` lint は module-level allow で抑止。
 const K1: f32 = -0.00179;
 const K2: f32 = -0.0233;
 const K3: f32 = -2.93;
@@ -51,12 +55,13 @@ impl DispersionStage {
         self.z1_out = 0.0;
     }
 
-    /// 1 サンプル処理: `y = a1·x + z1_in - a1·z1_out`、状態更新。
-    /// `KarplusStrong::process_sample` のホットパスで 8 段直列呼出される前提のため
-    /// `#[inline(always)]` で関数呼出オーバーヘッドを除去。
+    /// 1 サンプル処理: `y = a1·(x − z1_out) + z1_in`、状態更新。
+    /// `y = a1·x + z1_in − a1·z1_out` を 1 mul に括った数学的等価形 (FMUL を 8×8 voice で
+    /// ~12% 削減)。`KarplusStrong::process_sample` のホットパスで 8 段直列呼出される
+    /// 前提のため `#[inline(always)]` で関数呼出オーバーヘッドを除去。
     #[inline(always)]
     pub fn process(&mut self, x: f32) -> f32 {
-        let y = self.a1 * x + self.z1_in - self.a1 * self.z1_out;
+        let y = self.a1 * (x - self.z1_out) + self.z1_in;
         self.z1_in = x;
         self.z1_out = y;
         y

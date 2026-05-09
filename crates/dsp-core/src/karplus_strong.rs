@@ -122,6 +122,9 @@ impl KarplusStrong {
     }
 
     /// テスト専用: dispersion 状態の検証用 read-only access。
+    /// `tests/` 配下の integration test は rlib 経由で参照するため `#[cfg(test)]` だと
+    /// 見えず、`#[doc(hidden)]` で公開しつつ docs.rs から隠す手法を採る (`buffer_capacity`
+    /// と同じ Phase 4a 既存パターン)。
     #[doc(hidden)]
     pub fn dispersion_active(&self) -> bool {
         self.dispersion_active
@@ -223,15 +226,16 @@ impl KarplusStrong {
         self.loss_filter.set_for_frequency(freq_hz);
 
         // Phase 4b D61: buffer 初期化を pluck (Phase 1〜4a 既存) / hammer (Piano kind) で分岐。
+        // 共通の buffer ゼロクリアは分岐前で実施。
+        for v in self.buffer.iter_mut() {
+            *v = 0.0;
+        }
         if self.dispersion_active {
             // === Hammer 経路 (Commuted impulse + velocity-dependent 1pole IIR LPF) ===
-            // 1) 単位 impulse を buffer[0] に配置、それ以外は 0
-            for v in self.buffer.iter_mut() {
-                *v = 0.0;
-            }
+            // 単位 impulse + velocity 依存 1pole IIR LPF: cutoff = lerp(LOW, HIGH, velocity)、
+            // α = 1 - exp(-2π·fc/fs) を算出して `y[n] = α·x[n] + (1-α)·y[n-1]`。
+            // Pick position は適用しない (hammer は固定位置、ピアノ物理として整合)。
             self.buffer[0] = velocity;
-            // 2) Velocity 依存 1pole IIR LPF: cutoff = lerp(LOW, HIGH, velocity)、
-            //    α = 1 - exp(-2π·fc/fs) を算出して `y[n] = α·x[n] + (1-α)·y[n-1]` で平滑化
             let cutoff_hz = HAMMER_CUTOFF_LOW_PIANO
                 + velocity.clamp(0.0, 1.0) * (HAMMER_CUTOFF_HIGH_PIANO - HAMMER_CUTOFF_LOW_PIANO);
             let alpha = (1.0 - (-2.0 * core::f32::consts::PI * cutoff_hz / self.sample_rate).exp())
@@ -241,14 +245,10 @@ impl KarplusStrong {
                 z = alpha * self.buffer[i] + (1.0 - alpha) * z;
                 self.buffer[i] = z;
             }
-            // Pick position は適用しない (hammer は固定位置、ピアノ物理として整合)
         } else {
             // === Pluck 経路 (Phase 1〜4a 既存、Default + 6 楽器) ===
             // noise burst を `buffer[i] -= buffer[i - K]` で in-place comb 整形。
             // K = round(β · length_int)、length_int-1 へ clamp。
-            for v in self.buffer.iter_mut() {
-                *v = 0.0;
-            }
             for i in 0..len_int {
                 self.buffer[i] = self.rng.next_unit_bipolar() * velocity;
             }

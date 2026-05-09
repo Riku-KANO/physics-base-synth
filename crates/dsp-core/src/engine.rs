@@ -303,13 +303,14 @@ impl Engine {
         self.voice_state_buffer.as_ptr()
     }
 
-    /// Phase 4a D52 / D53 + Phase 4b D67 (D63 改訂後): 楽器プリセット切替。
+    /// Phase 4a D52 / D53 + Phase 4b D67: 楽器プリセット切替。
     /// 全 voice 即時 release → hold_stack / sustain_state クリア → current_instrument 更新
     /// → ModalBodyResonator の係数差し替え + state クリア → dispersion_active fan-out。
-    ///
-    /// D63 当初の 5 ms fade-out は SmoothedValue 同期 set_target で実現不能のため撤回 (指摘事項 #3)。
-    /// Phase 4a D53「即時 release」を完全継承し、`pool.set_dispersion_active(matches!(kind, Piano))`
-    /// の 1 行追加のみ。pop noise 軽減 (fade-out / cross-fade) は Phase 4c 送り。
+    /// `SmoothedValue::set_target` は target 代入のみで current は `next_sample()` でしか
+    /// 進まないため、同期メソッド内で fade-out は実現不能。Phase 4a D53「即時 release」を
+    /// 完全継承し、`pool.set_dispersion_active(matches!(kind, Piano))` の 1 行を追加するのみ。
+    /// pop noise 軽減 (fade-out / cross-fade) は Phase 4c の `PendingInstrumentChange`
+    /// 状態機械で再実装する候補。
     pub fn apply_instrument(&mut self, kind: InstrumentKind) {
         self.pool.all_notes_off();
         self.hold_stack.clear();

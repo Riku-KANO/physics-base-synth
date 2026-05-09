@@ -1,8 +1,9 @@
 //! Phase 4b D60 / D61 / D67: KarplusStrong に統合された dispersion 経路のテスト。
 //!
-//! Step 6 で `note_on` 時の a1 算出と dispersion_active flag の挙動、
-//! Step 7 で `process_sample` の cascade 経由 + D67 Phase 4a 互換性核心テストを追加。
-//! hammer 経路 (D61) のテストは Step 8 で追加する。
+//! `note_on` 時の a1 算出 / dispersion_active flag / `process_sample` の cascade 経由 +
+//! D67 Phase 4a 互換性核心テストをここに集約。hammer 経路 (D61) のテストは
+//! `excitation_snapshot` (cfg(test) 限定) を使うため Phase 4a 流儀に倣い
+//! `crates/dsp-core/src/karplus_strong.rs` 内 `mod excitation_tests` に配置。
 
 #[path = "fixtures/phase4a_default_c4_v08.rs"]
 mod phase4a_golden;
@@ -87,10 +88,6 @@ fn test_set_dispersion_active_false_resets_stages() {
         "a1 stays from previous note_on (will be overwritten on next active note_on)"
     );
 }
-
-// hammer / pluck の励振 buffer を覗くテストは `excitation_snapshot` (cfg(test) 限定)
-// を使うため、Phase 4a の流儀に倣い `crates/dsp-core/src/karplus_strong.rs` 内の
-// `mod excitation_tests` に hammer 系テスト 3 件を配置している (Step 8 で追加)。
 
 /// Phase 4b D67 の核心テスト。Default kind / Mod Wheel=0 / LFO depth=0 で
 /// Phase 4b の `dispersion_active = false` 経路の出力が、Phase 4a HEAD の

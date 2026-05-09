@@ -13,11 +13,11 @@ declare const registerProcessor: (name: string, processor: new () => AudioWorkle
 // esbuild の --define:DEV_MODE=true / --define:DEV_MODE=false で build 時に
 // `true` / `false` リテラルに置換され、production の `if (false) { ... }` ブロックは
 // tree-shake で完全削除される。ローカル `const DEV_MODE = ...` は esbuild の define
-// 対象外なので、ここでは declare const で型のみ宣言する (指摘事項 #2 反映)。
+// 対象外 (識別子のみ置換) なので、ここでは declare const で型のみ宣言する。
 declare const DEV_MODE: boolean;
 
-// AudioWorkletGlobalScope.performance.now() を使う。`currentFrame` は callback 内では
-// 進まないため self time 計測には使えない (指摘事項 #1 反映)。
+// AudioWorkletGlobalScope の performance.now() を使う。`currentFrame` は callback 内では
+// 進まないため self time 計測には使えない (音声時間 128/sampleRate ≈ 2.67ms を返すだけ)。
 declare const performance: { now(): number };
 
 // Phase 4b D66: dev-only timing 集約用の動的プロパティ。class フィールドとして宣言すると

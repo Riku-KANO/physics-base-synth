@@ -176,24 +176,9 @@ fn test_apply_instrument_piano_enables_dispersion() {
 }
 
 #[test]
-fn test_apply_instrument_default_disables_dispersion() {
-    let mut e = fresh_engine();
-    // Piano を一度有効にしてから Default に戻す
-    e.apply_instrument(InstrumentKind::Piano);
-    e.apply_instrument(InstrumentKind::Default);
-    let pool = e.pool();
-    for i in 0..8 {
-        let v = pool.voice(i).expect("voice exists");
-        assert!(
-            !v.dispersion_active(),
-            "voice {i} should have dispersion_active=false after apply_instrument(Default)"
-        );
-    }
-}
-
-#[test]
-fn test_apply_instrument_other_kinds_disable_dispersion() {
-    // Piano 以外のすべての楽器で dispersion_active = false
+fn test_apply_instrument_non_piano_kinds_disable_dispersion() {
+    // Piano 以外のすべての楽器 (Default 含む 7 種) で dispersion_active = false
+    // F54-c: Default に戻す経路もカバー (kinds[0])。
     let mut e = fresh_engine();
     let kinds = [
         InstrumentKind::Default,
