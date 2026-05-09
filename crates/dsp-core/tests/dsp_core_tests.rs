@@ -217,6 +217,97 @@ fn test_engine_process_block_timing_phase4a() {
     );
 }
 
+/// Phase 4b F50: release ビルドで Piano kind 最悪ケース (8 voice + Pitch Bend + CC#7 +
+/// Mod Wheel = 1.0 + LFO depths 全 1.0 + dispersion 8 段 cascade) で process(128 frames)
+/// 平均が < 1.7 ms 以内。CI flaky 対策の上限は 2.0 ms。
+#[test]
+#[cfg(not(debug_assertions))]
+fn test_engine_process_block_timing_phase4b_piano() {
+    use dsp_core::lfo::{LfoDestination, LfoWaveform};
+    use dsp_core::params::InstrumentKind;
+    use std::time::Instant;
+
+    let mut e = fresh_engine();
+    e.apply_instrument(InstrumentKind::Piano);
+    for i in 0..8 {
+        e.note_on(60 + i, 0.8);
+    }
+    e.handle_pitch_bend(1.0);
+    e.handle_midi_cc(7, 0.8);
+    e.handle_midi_cc(1, 1.0);
+    e.lfo_set_rate(5.0);
+    e.lfo_set_waveform(LfoWaveform::Sine);
+    e.lfo_set_depth(LfoDestination::Pitch, 1.0);
+    e.lfo_set_depth(LfoDestination::Brightness, 1.0);
+    e.lfo_set_depth(LfoDestination::Volume, 1.0);
+    e.set_param(ParamId::BodyWet as u32, 0.7);
+
+    let mut output_l = vec![0.0_f32; 128];
+    let mut output_r = vec![0.0_f32; 128];
+    const ITERATIONS: u32 = 1000;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        e.process(&mut output_l, &mut output_r);
+    }
+    let elapsed = start.elapsed();
+    let per_block_us = elapsed.as_micros() as f64 / ITERATIONS as f64;
+    let per_block_ms = per_block_us / 1000.0;
+    println!(
+        "F50 (Phase 4b Piano): process_block timing = {:.3} ms / 128 frames (8 voice + dispersion 8 段 + LFO + Mod Wheel + Pitch Bend + CC#7)",
+        per_block_ms
+    );
+    assert!(
+        per_block_ms < 2.0,
+        "F50 Piano fail: {:.3} ms >= 2.0 ms (Phase 4b target 1.7 ms, flaky margin 2.0 ms)",
+        per_block_ms
+    );
+}
+
+/// Phase 4b F50: 非 Piano (Default) で dispersion skip 経路の timing。
+/// Phase 4a 同等の avg < 1.0 ms (Phase 4a 0.023 ms 程度) を期待、CI flaky 上限 1.5 ms。
+#[test]
+#[cfg(not(debug_assertions))]
+fn test_engine_process_block_timing_phase4b_other() {
+    use dsp_core::lfo::{LfoDestination, LfoWaveform};
+    use dsp_core::params::InstrumentKind;
+    use std::time::Instant;
+
+    let mut e = fresh_engine();
+    e.apply_instrument(InstrumentKind::Default);
+    for i in 0..8 {
+        e.note_on(60 + i, 0.8);
+    }
+    e.handle_pitch_bend(1.0);
+    e.handle_midi_cc(7, 0.8);
+    e.handle_midi_cc(1, 1.0);
+    e.lfo_set_rate(5.0);
+    e.lfo_set_waveform(LfoWaveform::Sine);
+    e.lfo_set_depth(LfoDestination::Pitch, 1.0);
+    e.lfo_set_depth(LfoDestination::Brightness, 1.0);
+    e.lfo_set_depth(LfoDestination::Volume, 1.0);
+    e.set_param(ParamId::BodyWet as u32, 0.7);
+
+    let mut output_l = vec![0.0_f32; 128];
+    let mut output_r = vec![0.0_f32; 128];
+    const ITERATIONS: u32 = 1000;
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        e.process(&mut output_l, &mut output_r);
+    }
+    let elapsed = start.elapsed();
+    let per_block_us = elapsed.as_micros() as f64 / ITERATIONS as f64;
+    let per_block_ms = per_block_us / 1000.0;
+    println!(
+        "F50 (Phase 4b non-Piano): process_block timing = {:.3} ms / 128 frames (Default kind, dispersion skip)",
+        per_block_ms
+    );
+    assert!(
+        per_block_ms < 1.5,
+        "F50 non-Piano fail: {:.3} ms >= 1.5 ms (Phase 4a regression baseline)",
+        per_block_ms
+    );
+}
+
 #[test]
 fn test_engine_voice_state_buffer_format() {
     // Phase 3 D41: 33 byte レイアウト (active mask 1 + 8 voice × f32 4 bytes = 33)。
