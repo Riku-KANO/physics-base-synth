@@ -379,7 +379,17 @@ impl KarplusStrong {
         // `% length_int` だと write/read で異なる剰余系になり buffer の論理長が破綻する。
         let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
 
-        let read_value = self.thiran.process(self.buffer[read_z]);
+        // Phase 4b D60: Dispersion cascade を Thiran の前段に挿入。
+        // `dispersion_active = false` 経路は Phase 4a と完全一致 (D67 互換性核心)。
+        let read_value = if self.dispersion_active {
+            let mut x = self.buffer[read_z];
+            for stage in self.dispersion_stages.iter_mut() {
+                x = stage.process(x);
+            }
+            self.thiran.process(x)
+        } else {
+            self.thiran.process(self.buffer[read_z])
+        };
 
         // Phase 4a D48: brightness LPF に LFO offset を加算してから clamp。
         let b = (self.brightness.next_sample() + self.lfo_brightness_offset).clamp(0.0, 1.0);

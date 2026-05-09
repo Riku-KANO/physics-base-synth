@@ -1,11 +1,16 @@
 //! Phase 4b D60 / D61 / D67: KarplusStrong に統合された dispersion 経路のテスト。
 //!
-//! Step 6 では `note_on` 時の a1 算出と dispersion_active flag の挙動を検証する。
-//! `process_sample` の cascade 経由検証 (D67 Phase 4a 互換性核心テスト) は Step 7 で追加、
+//! Step 6 で `note_on` 時の a1 算出と dispersion_active flag の挙動、
+//! Step 7 で `process_sample` の cascade 経由 + D67 Phase 4a 互換性核心テストを追加。
 //! hammer 経路 (D61) のテストは Step 8 で追加する。
 
+#[path = "fixtures/phase4a_default_c4_v08.rs"]
+mod phase4a_golden;
+
+use dsp_core::engine::Engine;
 use dsp_core::karplus_strong::KarplusStrong;
 use dsp_core::params::INHARMONICITY_B_PIANO;
+use dsp_core::traits::AudioProcessor;
 use dsp_core::{compute_dispersion_a1, DISPERSION_STAGES};
 
 const SR: f32 = 48_000.0;
@@ -81,6 +86,48 @@ fn test_set_dispersion_active_false_resets_stages() {
         a1_after_off.abs() > 0.0,
         "a1 stays from previous note_on (will be overwritten on next active note_on)"
     );
+}
+
+/// Phase 4b D67 の核心テスト。Default kind / Mod Wheel=0 / LFO depth=0 で
+/// Phase 4b の `dispersion_active = false` 経路の出力が、Phase 4a HEAD の
+/// 出力と ε=1e-6 でバイト一致することを保証する。
+///
+/// Golden は `crates/dsp-core/tests/fixtures/phase4a_default_c4_v08.rs` に
+/// Phase 4a HEAD (commit dfa81c3) で `cargo test ... --nocapture` で取得した
+/// 256 frame × 2ch を埋め込んでいる。
+#[test]
+fn test_dispersion_disabled_matches_phase4a() {
+    let mut e = Engine::new();
+    e.prepare(48_000.0, 128);
+    e.note_on(60, 0.8);
+
+    let mut buf_l = vec![0.0_f32; 256];
+    let mut buf_r = vec![0.0_f32; 256];
+    e.process(&mut buf_l, &mut buf_r);
+
+    let golden_l = phase4a_golden::PHASE4A_GOLDEN_L;
+    let golden_r = phase4a_golden::PHASE4A_GOLDEN_R;
+
+    for i in 0..256 {
+        let dl = (buf_l[i] - golden_l[i]).abs();
+        assert!(
+            dl < 1.0e-6,
+            "L mismatch at frame {}: phase4b={} vs phase4a_golden={} (|delta|={})",
+            i,
+            buf_l[i],
+            golden_l[i],
+            dl
+        );
+        let dr = (buf_r[i] - golden_r[i]).abs();
+        assert!(
+            dr < 1.0e-6,
+            "R mismatch at frame {}: phase4b={} vs phase4a_golden={} (|delta|={})",
+            i,
+            buf_r[i],
+            golden_r[i],
+            dr
+        );
+    }
 }
 
 #[test]
