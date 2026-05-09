@@ -85,3 +85,78 @@ fn test_no_allocation_with_lfo_and_instrument() {
         "voice buffer capacity must not change across LFO + instrument + Pitch Bend + CC#7"
     );
 }
+
+/// Phase 4b F58: 8 voice + Piano kind active + LFO + Mod Wheel + Pitch Bend + 楽器切替
+/// (Piano ↔ Default 1 回) で voice buffer / LFO 状態 / dispersion_stages capacity 不変。
+/// dispersion_stages は inline 配列 ([DispersionStage; 8]) なので heap 操作なし、
+/// hammer LPF も note_on 内 stack 変数のみで alloc しない。
+#[test]
+fn test_no_allocation_with_piano_kind() {
+    let mut engine = Engine::new();
+    engine.prepare(SAMPLE_RATE, 128);
+
+    engine.lfo_set_rate(5.0);
+    engine.lfo_set_waveform(LfoWaveform::Sine);
+    engine.lfo_set_depth(LfoDestination::Pitch, 0.5);
+    engine.lfo_set_depth(LfoDestination::Brightness, 0.5);
+    engine.lfo_set_depth(LfoDestination::Volume, 0.5);
+    engine.handle_midi_cc(1, 1.0);
+
+    // Piano に切替 + 8 voice 全 active
+    engine.apply_instrument(InstrumentKind::Piano);
+    for n in 60..=67 {
+        engine.note_on(n, 0.8);
+    }
+
+    let cap_before: Vec<usize> = (0..8)
+        .map(|i| {
+            engine
+                .pool()
+                .voice(i)
+                .map(|v| v.buffer_capacity())
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let mut buf_l = vec![0.0_f32; 4800];
+    let mut buf_r = vec![0.0_f32; 4800];
+
+    for cycle in 0..10 {
+        engine.handle_pitch_bend(0.5);
+        engine.handle_midi_cc(7, 0.7);
+        engine.lfo_set_rate(3.0 + cycle as f32 * 0.5);
+        engine.process(&mut buf_l, &mut buf_r);
+    }
+
+    // Piano ↔ Default 切替を 1 回 (set_dispersion_active fan-out 経由)
+    engine.apply_instrument(InstrumentKind::Default);
+    for n in 60..=67 {
+        engine.note_on(n, 0.8);
+    }
+    for _ in 0..5 {
+        engine.process(&mut buf_l, &mut buf_r);
+    }
+
+    engine.apply_instrument(InstrumentKind::Piano);
+    for n in 60..=67 {
+        engine.note_on(n, 0.8);
+    }
+    for _ in 0..5 {
+        engine.process(&mut buf_l, &mut buf_r);
+    }
+
+    let cap_after: Vec<usize> = (0..8)
+        .map(|i| {
+            engine
+                .pool()
+                .voice(i)
+                .map(|v| v.buffer_capacity())
+                .unwrap_or(0)
+        })
+        .collect();
+
+    assert_eq!(
+        cap_before, cap_after,
+        "Piano kind: voice buffer capacity must not change across LFO + Piano↔Default + Pitch Bend + CC#7"
+    );
+}

@@ -73,6 +73,7 @@ mod tests {
         fn set_pitch_bend(&mut self, _semitones: f32) {}
         fn set_lfo_pitch_factor(&mut self, _factor: f32) {}
         fn set_lfo_brightness_offset(&mut self, _offset: f32) {}
+        fn set_dispersion_active(&mut self, _active: bool) {}
     }
 
     fn voice(amp: f32, age: u32) -> MockVoice {

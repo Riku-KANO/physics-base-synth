@@ -159,6 +159,117 @@ fn test_stereo_spread_per_instrument() {
     assert!((stereo_spread_for_instrument(InstrumentKind::Sitar) - 0.08).abs() < 1e-6);
 }
 
+// ===== Phase 4b D67 / F54: apply_instrument で dispersion_active を fan-out =====
+
+#[test]
+fn test_apply_instrument_piano_enables_dispersion() {
+    let mut e = fresh_engine();
+    e.apply_instrument(InstrumentKind::Piano);
+    let pool = e.pool();
+    for i in 0..8 {
+        let v = pool.voice(i).expect("voice exists");
+        assert!(
+            v.dispersion_active(),
+            "voice {i} should have dispersion_active=true after apply_instrument(Piano)"
+        );
+    }
+}
+
+#[test]
+fn test_apply_instrument_non_piano_kinds_disable_dispersion() {
+    // Piano 以外のすべての楽器 (Default 含む 7 種) で dispersion_active = false
+    // F54-c: Default に戻す経路もカバー (kinds[0])。
+    let mut e = fresh_engine();
+    let kinds = [
+        InstrumentKind::Default,
+        InstrumentKind::GuitarClassical,
+        InstrumentKind::Ukulele,
+        InstrumentKind::Mandolin,
+        InstrumentKind::Bass,
+        InstrumentKind::GuitarSteel,
+        InstrumentKind::Sitar,
+    ];
+    for kind in kinds {
+        e.apply_instrument(InstrumentKind::Piano);
+        e.apply_instrument(kind);
+        let pool = e.pool();
+        for i in 0..8 {
+            assert!(
+                !pool.voice(i).unwrap().dispersion_active(),
+                "{kind:?} should disable dispersion on voice {i}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_apply_instrument_piano_no_alloc() {
+    // apply_instrument(Piano) を 100 連打で voice buffer / dispersion_stages 容量不変。
+    // dispersion_stages は inline 配列なので heap 操作なし、buffer も Phase 1 で確保済み。
+    let mut e = fresh_engine();
+    let cap_before: Vec<usize> = (0..8)
+        .map(|i| e.pool().voice(i).map(|v| v.buffer_capacity()).unwrap_or(0))
+        .collect();
+
+    for _ in 0..50 {
+        e.apply_instrument(InstrumentKind::Piano);
+        e.apply_instrument(InstrumentKind::Default);
+    }
+
+    let cap_after: Vec<usize> = (0..8)
+        .map(|i| e.pool().voice(i).map(|v| v.buffer_capacity()).unwrap_or(0))
+        .collect();
+    assert_eq!(
+        cap_before, cap_after,
+        "voice buffer capacity unchanged across 100 Piano↔Default toggles"
+    );
+}
+
+// ===== Phase 4b D62 / F53-c/d/e: Piano kind の Engine 経由動作確認 =====
+
+#[test]
+fn test_apply_instrument_piano_modal_coeffs() {
+    // Default → Piano で modal_body の係数が Piano 値ベースに変わることを確認
+    let mut e = fresh_engine();
+    let coeff_default = e.modal_body().coeff_l_b0(0);
+    e.apply_instrument(InstrumentKind::Piano);
+    let coeff_piano = e.modal_body().coeff_l_b0(0);
+    assert!(
+        (coeff_default - coeff_piano).abs() > 1e-6,
+        "apply_instrument(Piano) should change modal coeff: default={coeff_default} piano={coeff_piano}"
+    );
+}
+
+#[test]
+fn test_body_modes_for_instrument_piano() {
+    use dsp_core::params::{body_modes_for_instrument, BODY_MODES_PIANO_L, BODY_MODES_PIANO_R};
+    // const は inline 展開され同一アドレスにならないため、値で比較する
+    let (l, r) = body_modes_for_instrument(InstrumentKind::Piano);
+    for i in 0..8 {
+        assert!((l[i].freq - BODY_MODES_PIANO_L[i].freq).abs() < 1e-6);
+        assert!((l[i].q - BODY_MODES_PIANO_L[i].q).abs() < 1e-6);
+        assert!((l[i].gain - BODY_MODES_PIANO_L[i].gain).abs() < 1e-6);
+        assert!((r[i].freq - BODY_MODES_PIANO_R[i].freq).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn test_instrument_kind_count_includes_piano() {
+    use dsp_core::params::INSTRUMENT_KIND_COUNT;
+    // Phase 4a 7 → Phase 4b 8 に拡張
+    assert_eq!(INSTRUMENT_KIND_COUNT, 8);
+}
+
+#[test]
+fn test_piano_specific_constants() {
+    use dsp_core::params::{
+        HAMMER_CUTOFF_HIGH_PIANO, HAMMER_CUTOFF_LOW_PIANO, INHARMONICITY_B_PIANO,
+    };
+    assert!((INHARMONICITY_B_PIANO - 7.5e-4).abs() < 1e-9);
+    assert!((HAMMER_CUTOFF_LOW_PIANO - 800.0).abs() < 1e-3);
+    assert!((HAMMER_CUTOFF_HIGH_PIANO - 4000.0).abs() < 1e-3);
+}
+
 #[test]
 fn test_default_instrument_matches_phase3_modes() {
     // Phase 3 既存 BODY_MODES_DEFAULT_L (= BODY_MODES_L alias) の各値が Default kind と一致。

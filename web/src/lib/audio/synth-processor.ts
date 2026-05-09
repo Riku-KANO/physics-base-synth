@@ -9,6 +9,29 @@ import type {
 declare const sampleRate: number;
 declare const registerProcessor: (name: string, processor: new () => AudioWorkletProcessor) => void;
 
+// Phase 4b D66: F38b 計測自動化スクリプト用 (dev only)。
+// esbuild の --define:DEV_MODE=true / --define:DEV_MODE=false で build 時に
+// `true` / `false` リテラルに置換され、production の `if (false) { ... }` ブロックは
+// tree-shake で完全削除される。ローカル `const DEV_MODE = ...` は esbuild の define
+// 対象外 (識別子のみ置換) なので、ここでは declare const で型のみ宣言する。
+declare const DEV_MODE: boolean;
+
+// AudioWorkletGlobalScope の performance.now() を使う。`currentFrame` は callback 内では
+// 進まないため self time 計測には使えない (音声時間 128/sampleRate ≈ 2.67ms を返すだけ)。
+declare const performance: { now(): number };
+
+// Phase 4b D66: dev-only timing 集約用の動的プロパティ。class フィールドとして宣言すると
+// production bundle に __publicField 呼出が残るため、DEV_MODE ブロック内のみで存在する
+// 任意プロパティとして扱う (production tree-shake で完全削除)。
+interface TimingState {
+	timingBuffer: Float32Array | null;
+	timingBufferCapacity: number;
+	timingBufferWriteIndex: number;
+	timingBufferCount: number;
+	timingBufferWrapped: boolean;
+	timingCaptureActive: boolean;
+}
+
 declare class AudioWorkletProcessor {
 	readonly port: MessagePort;
 	constructor();
@@ -62,7 +85,8 @@ const INSTRUMENT_KIND_MAP: Record<InstrumentKindKey, number> = {
 	mandolin: 3,
 	bass: 4,
 	guitar_steel: 5,
-	sitar: 6
+	sitar: 6,
+	piano: 7 // Phase 4b D62
 };
 
 const FRAMES = 128;
@@ -86,11 +110,27 @@ class SynthProcessor extends AudioWorkletProcessor {
 	private warnedFrameLength = false;
 	private framesSinceVoiceStatePush = 0;
 
+	// Phase 4b D66: dev-only timing 集約 (production では --define:DEV_MODE=false +
+	// --minify-syntax で `if (false) { ... }` ブロックが削除され、フィールド宣言自体も
+	// 出さない設計とするため class フィールドではなく `Pick<...>` 互換の任意プロパティ
+	// として `as any` 経由で動的代入する。dev では型チェックを通すため interface を
+	// 別途宣言する。
+	// (これらのプロパティへのアクセスは DEV_MODE ガード内のみ)
+
 	constructor() {
 		super();
 		this.port.onmessage = (e: MessageEvent<ToWorkletMessage>) => {
 			void this.onMessage(e.data);
 		};
+		if (DEV_MODE) {
+			const self = this as unknown as TimingState;
+			self.timingBufferCapacity = 4096;
+			self.timingBuffer = new Float32Array(self.timingBufferCapacity);
+			self.timingBufferWriteIndex = 0;
+			self.timingBufferCount = 0;
+			self.timingBufferWrapped = false;
+			self.timingCaptureActive = false;
+		}
 	}
 
 	private async onMessage(msg: ToWorkletMessage): Promise<void> {
@@ -133,6 +173,45 @@ class SynthProcessor extends AudioWorkletProcessor {
 				break;
 			case 'dispose':
 				this.disposeWasm();
+				break;
+			case 'startTimingCapture':
+				if (DEV_MODE) {
+					const self = this as unknown as TimingState;
+					self.timingBufferWriteIndex = 0;
+					self.timingBufferCount = 0;
+					self.timingBufferWrapped = false;
+					self.timingCaptureActive = true;
+				}
+				break;
+			case 'stopTimingCapture':
+				if (DEV_MODE) {
+					const self = this as unknown as TimingState;
+					if (self.timingBuffer) {
+						// 時系列順に並べ直して main へ送る:
+						// wrap していなければ [0..count)
+						// wrap していれば [writeIndex..capacity) ++ [0..writeIndex)
+						const samples: number[] = [];
+						if (self.timingBufferWrapped) {
+							for (let i = self.timingBufferWriteIndex; i < self.timingBufferCapacity; i++) {
+								samples.push(self.timingBuffer[i]);
+							}
+							for (let i = 0; i < self.timingBufferWriteIndex; i++) {
+								samples.push(self.timingBuffer[i]);
+							}
+						} else {
+							for (let i = 0; i < self.timingBufferCount; i++) {
+								samples.push(self.timingBuffer[i]);
+							}
+						}
+						const msg: FromWorkletMessage = {
+							type: 'timing',
+							samples,
+							bufferOverflow: self.timingBufferWrapped
+						};
+						this.port.postMessage(msg);
+						self.timingCaptureActive = false;
+					}
+				}
 				break;
 		}
 	}
@@ -252,6 +331,15 @@ class SynthProcessor extends AudioWorkletProcessor {
 	}
 
 	process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
+		// Phase 4b D66: dev-only self time 計測。production では tree-shake で削除。
+		let startMs = 0;
+		if (DEV_MODE) {
+			const self = this as unknown as TimingState;
+			if (self.timingCaptureActive) {
+				startMs = performance.now();
+			}
+		}
+
 		const out = outputs[0];
 		if (!out || !out[0]) return true;
 
@@ -284,6 +372,22 @@ class SynthProcessor extends AudioWorkletProcessor {
 		if (out[1] && this.rightView) out[1].set(this.rightView);
 
 		this.maybePushVoiceState();
+
+		if (DEV_MODE) {
+			const self = this as unknown as TimingState;
+			if (self.timingCaptureActive && self.timingBuffer) {
+				const elapsedMs = performance.now() - startMs;
+				self.timingBuffer[self.timingBufferWriteIndex] = elapsedMs;
+				self.timingBufferWriteIndex++;
+				if (self.timingBufferWriteIndex >= self.timingBufferCapacity) {
+					self.timingBufferWriteIndex = 0;
+					self.timingBufferWrapped = true;
+				}
+				if (self.timingBufferCount < self.timingBufferCapacity) {
+					self.timingBufferCount++;
+				}
+			}
+		}
 		return true;
 	}
 }

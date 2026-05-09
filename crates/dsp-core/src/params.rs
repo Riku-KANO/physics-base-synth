@@ -142,6 +142,7 @@ pub const STEREO_SPREAD_MANDOLIN: f32 = 0.06;
 pub const STEREO_SPREAD_BASS: f32 = 0.03;
 pub const STEREO_SPREAD_GUITAR_STEEL: f32 = 0.05;
 pub const STEREO_SPREAD_SITAR: f32 = 0.08;
+pub const STEREO_SPREAD_PIANO: f32 = 0.05;
 
 #[rustfmt::skip]
 pub const BODY_MODES_DEFAULT_L: [BodyMode; 8] = [
@@ -311,6 +312,30 @@ pub const BODY_MODES_SITAR_R: [BodyMode; 8] = [
     BodyMode { freq: 2300.0, q: 118.8, gain: 0.27 },
 ];
 
+#[rustfmt::skip]
+pub const BODY_MODES_PIANO_L: [BodyMode; 8] = [
+    BodyMode { freq: 55.0, q: 10.0, gain: 1.0 },
+    BodyMode { freq: 110.0, q: 12.0, gain: 0.85 },
+    BodyMode { freq: 175.0, q: 15.0, gain: 0.7 },
+    BodyMode { freq: 280.0, q: 18.0, gain: 0.55 },
+    BodyMode { freq: 460.0, q: 22.0, gain: 0.45 },
+    BodyMode { freq: 750.0, q: 28.0, gain: 0.35 },
+    BodyMode { freq: 1300.0, q: 35.0, gain: 0.28 },
+    BodyMode { freq: 2200.0, q: 40.0, gain: 0.22 },
+];
+
+#[rustfmt::skip]
+pub const BODY_MODES_PIANO_R: [BodyMode; 8] = [
+    BodyMode { freq: 57.75, q: 9.5, gain: 1.05 },
+    BodyMode { freq: 104.5, q: 12.6, gain: 0.8925 },
+    BodyMode { freq: 183.75, q: 14.25, gain: 0.735 },
+    BodyMode { freq: 266.0, q: 18.9, gain: 0.5775 },
+    BodyMode { freq: 483.0, q: 20.9, gain: 0.4725 },
+    BodyMode { freq: 712.5, q: 29.4, gain: 0.3675 },
+    BodyMode { freq: 1365.0, q: 33.25, gain: 0.294 },
+    BodyMode { freq: 2090.0, q: 42.0, gain: 0.231 },
+];
+
 // Phase 3 互換: Default kind の alias
 pub const BODY_MODES_L: [BodyMode; 8] = BODY_MODES_DEFAULT_L;
 pub const BODY_MODES_R: [BodyMode; 8] = BODY_MODES_DEFAULT_R;
@@ -327,6 +352,7 @@ pub enum InstrumentKind {
     Bass = 4,
     GuitarSteel = 5,
     Sitar = 6,
+    Piano = 7,
 }
 
 impl InstrumentKind {
@@ -339,12 +365,17 @@ impl InstrumentKind {
             4 => Some(Self::Bass),
             5 => Some(Self::GuitarSteel),
             6 => Some(Self::Sitar),
+            7 => Some(Self::Piano),
             _ => None,
         }
     }
 }
 
-pub const INSTRUMENT_KIND_COUNT: usize = 7;
+pub const INSTRUMENT_KIND_COUNT: usize = 8;
+
+pub const INHARMONICITY_B_PIANO: f32 = 0.00075;
+pub const HAMMER_CUTOFF_LOW_PIANO: f32 = 800.0;
+pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 4000.0;
 
 #[rustfmt::skip]
 pub fn body_modes_for_instrument(
@@ -358,6 +389,7 @@ pub fn body_modes_for_instrument(
         InstrumentKind::Bass => (&BODY_MODES_BASS_L, &BODY_MODES_BASS_R),
         InstrumentKind::GuitarSteel => (&BODY_MODES_GUITAR_STEEL_L, &BODY_MODES_GUITAR_STEEL_R),
         InstrumentKind::Sitar => (&BODY_MODES_SITAR_L, &BODY_MODES_SITAR_R),
+        InstrumentKind::Piano => (&BODY_MODES_PIANO_L, &BODY_MODES_PIANO_R),
     }
 }
 
@@ -370,5 +402,6 @@ pub fn stereo_spread_for_instrument(kind: InstrumentKind) -> f32 {
         InstrumentKind::Bass => STEREO_SPREAD_BASS,
         InstrumentKind::GuitarSteel => STEREO_SPREAD_GUITAR_STEEL,
         InstrumentKind::Sitar => STEREO_SPREAD_SITAR,
+        InstrumentKind::Piano => STEREO_SPREAD_PIANO,
     }
 }

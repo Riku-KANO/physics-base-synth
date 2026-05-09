@@ -26,4 +26,8 @@ pub trait Voice {
     /// Phase 4a D48: LFO Brightness offset を毎 sample 更新。
     /// `process_sample` で `(brightness + offset).clamp(0, 1)` として適用。
     fn set_lfo_brightness_offset(&mut self, offset: f32);
+
+    /// Phase 4b D67: 楽器切替で voice 単位に dispersion_active を設定。
+    /// `Engine::apply_instrument(Piano)` で true、他 7 楽器で false。
+    fn set_dispersion_active(&mut self, active: bool);
 }

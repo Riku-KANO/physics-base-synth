@@ -139,6 +139,23 @@
         { "freq": 1750.0, "q": 100.0, "gain": 0.3  },
         { "freq": 2500.0, "q": 110.0, "gain": 0.25 }
       ]
+    },
+    {
+      "kind": "Piano",
+      "stereo_spread": 0.05,
+      "inharmonicity_b": 7.5e-4,
+      "hammer_cutoff_low_hz": 800.0,
+      "hammer_cutoff_high_hz": 4000.0,
+      "body_modes": [
+        { "freq": 55.0,   "q": 10.0, "gain": 1.0  },
+        { "freq": 110.0,  "q": 12.0, "gain": 0.85 },
+        { "freq": 175.0,  "q": 15.0, "gain": 0.7  },
+        { "freq": 280.0,  "q": 18.0, "gain": 0.55 },
+        { "freq": 460.0,  "q": 22.0, "gain": 0.45 },
+        { "freq": 750.0,  "q": 28.0, "gain": 0.35 },
+        { "freq": 1300.0, "q": 35.0, "gain": 0.28 },
+        { "freq": 2200.0, "q": 40.0, "gain": 0.22 }
+      ]
     }
   ]
 }

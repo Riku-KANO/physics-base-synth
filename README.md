@@ -1,6 +1,6 @@
 # physics-base-synth
 
-物理ベース・シンセサイザー（Karplus–Strong）の Phase 4a (Phase 3 + LFO + Mod Wheel + Preset + 多楽器 6 種 + wasm-opt -O3) 対応版。Rust + WebAssembly + Svelte 5 (SvelteKit) で実装。
+物理ベース・シンセサイザー（Karplus–Strong）の Phase 4b (Phase 4a + ピアノ音色 / Stretching all-pass + Hammer model) 対応版。Rust + WebAssembly + Svelte 5 (SvelteKit) で実装。
 
 ## 動作環境
 
@@ -70,6 +70,7 @@ Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
 - Phase 2 (polyphony / fractional delay / ParamDescriptor): `docs/specs/2026-05-07-002-phase2/`
 - Phase 3 (Body Resonator / Extended KS / MIDI CC / Voice Meter): `docs/specs/2026-05-07-003-phase3/`
 - Phase 4a (LFO / Mod Wheel / Preset / 多楽器 6 種 / wasm-opt -O3): `docs/specs/2026-05-08-004-phase4a/`
+- Phase 4b (ピアノ音色 / Stretching all-pass + Hammer model + Modal Body Piano + `__synthDev.measureProcessTime` + `.gitattributes` LF 統一): `docs/specs/2026-05-09-005-phase4b/`
 
 ## Phase 3 で追加された機能
 
@@ -183,19 +184,52 @@ Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
 | **F46** | `cargo test --release -p dsp-core test_engine_process_block_timing_phase4a -- --nocapture` | 平均 < 1.7 ms (実測 0.023 ms、74× 余裕) |
 | **F47** | Phase 3 既存 93 件 + 1 IGNORED 維持 + Default プリセット + Mod Wheel = 0 で Phase 3 と同じ音 | regression なし |
 
-## Phase 4b への申し送り (別計画扱い)
+## Phase 4b で追加された機能
 
-- **ピアノ音色** (Stretching all-pass for inharmonicity B≈10⁻³ + impact model) — Phase 4b 主目的
+> **Note: Piano 音色の聴感は KS ベースの構造的限界で「弦楽器寄り」になります。** 仕様書策定時から想定された制約で、Karplus–Strong ループ自体が弦のシミュレーションであること、Hammer model が impulse + 1pole LPF の近似であること、複数弦 (1-3 弦/note) と sympathetic resonance が未実装であることが原因です。本物のピアノ音色は Phase 4c で Multi-string + Hertz law hammer (Boutillon) + Sympathetic resonance + Soundboard モード増 (M=16) 等の構造拡張で追求する候補です。詳細は `docs/retrospective/2026-05-09-005-phase4b.md` §5 / §7。
+
+- **ピアノ音色 (D56-D62)**: 8 番目の楽器 `InstrumentKind::Piano = 7` を追加。
+  - **Stretching all-pass cascade (D57/D58/D59)**: M=8 段の 1 次 allpass を KS ループに直列、Rauhala-Välimäki 2006 closed-form で a1 を算出。Piano `inharmonicity_b = 7.5e-4` (A4 基準) で stiff string の `f_n = n·f_0·√(1+B·n²)` を再現。
+  - **Hammer model (D61)**: `note_on` の buffer 初期化を pluck/hammer で分岐。Piano は **Commuted impulse + velocity-dependent 1pole IIR LPF** (cutoff = lerp(800Hz, 4000Hz, velocity)) で felt hammer を近似。
+  - **Piano Modal Body 係数 (D62)**: Conklin 1996 の grand piano soundboard 第 1 モード = 55Hz、stereo_spread = 0.05、M=8 (`BODY_MODES_PIANO_L/R`)。
+  - **Factory Preset Piano**: damping=0.998 / brightness=0.55 / outputGain=0.7 / pickPosition=0.13 / bodyWet=0.4。LFO depth 全 0 (標準ピアノは vibrato なし)。
+- **Phase 4a 互換性のバイト一致保証 (D67)**: `dispersion_active = false` の Phase 4a 既存 7 楽器では `process_sample` で cascade を skip し、`thiran.process(self.buffer[read_z])` の Phase 4a 経路と完全一致。`test_dispersion_disabled_matches_phase4a` で Phase 4a HEAD (commit dfa81c3) との出力 256 frame × 2ch を ε=1e-6 でバイト一致確認。
+- **`__synthDev.measureProcessTime` (D66)**: dev-only F38b 計測自動化スクリプト。AudioWorklet 側で `performance.now()` の差分を取り Float32Array(4096) リングバッファ (約 10.92 秒分) に self time を蓄積、`stopTimingCapture` で main へ集約。`if (DEV_MODE)` ガード + `--define:DEV_MODE=true/false` + `--minify-syntax` で production tree-shake。
+- **`.gitattributes` LF 統一 (D65)**: `* text=auto eol=lf` + 主要拡張子の eol=lf を明示、Phase 4a で頻発した CRLF/LF 戦争を断つ。
+
+### Phase 4b 検証項目 (F48〜F58)
+
+| ID | 手順 | 期待結果 |
+|---|---|---|
+| **F48** | `pnpm dev` → ブラウザ DevTools Console: `await window.__synthDev.measureProcessTime(10000)` | avg < 1.7 ms / max < 2.7 ms (Piano kind 最悪ケース) |
+| **F49** | `pnpm build` 後 `gzip -kc web/build/_app/immutable/assets/wasm_audio.*.wasm \| wc -c` | gzip 目標 < 22 KB / 警戒 < 25 KB / 撤退 < 30 KB (実測 18.71 KB) |
+| **F50** | `cargo test --release -p dsp-core test_engine_process_block_timing_phase4b -- --nocapture` | Piano kind avg < 1.7 ms / 非 Piano avg < 1.0 ms (実測 0.043 / 0.026 ms) |
+| **F51** | `cargo test -p dsp-core test_dispersion_` | a1 値域 / B 単調性 / Ikey 補正 / cascade 安定 / 群遅延正、計 8 件 |
+| **F52** | `cargo test -p dsp-core test_note_on_with_dispersion_` + `test_hammer_velocity_affects_brightness` | hammer 経路 = 単調減衰、pluck 経路 = noise burst、velocity で高域成分変化 |
+| **F53** | `cargo test -p dsp-core test_piano_modal_` + `test_apply_instrument_piano_modal_coeffs` | Piano Modal 係数 (55Hz/0.05) を Engine 経由で取得・適用 |
+| **F54** | `cargo test -p dsp-core test_apply_instrument_piano_enables_dispersion` | apply_instrument(Piano) で全 8 voice の dispersion_active=true、Default で false |
+| **F55** | `cargo test -p dsp-core test_dispersion_disabled_matches_phase4a` | Default + Mod Wheel=0 + LFO depth=0 で Phase 4a HEAD と ε=1e-6 バイト一致 |
+| **F56** | `git ls-files --eol \| grep -v "i/lf" \| grep -v binary` | 出力ゼロ (LF 統一)、`pnpm fmt` 後の CRLF/LF 差分なし |
+| **F57** | Phase 4a 既存 120 + 1 IGNORED + Default + Mod Wheel = 0 で Phase 4a と同じ音 | regression なし |
+| **F58** | `cargo test -p dsp-core test_no_allocation_with_piano_kind` | 8 voice + Piano + 楽器切替で voice buffer / dispersion_stages capacity 不変 |
+
+## Phase 4c への申し送り (別計画扱い)
+
 - C8 ピッチ自己発振: damping=1.0 自己発振モード or FFT-based estimator
 - Pick position の fractional 化 + 連続変更
 - Look-ahead limiter (5 ms 遅延型、soft clip より透明)
 - WASM SIMD (`target-feature=+simd128`) — Safari/Firefox 対応再評価
 - LFO 波形拡張 (S&H / Square / Sawtooth)
 - LFO destinations 拡張 (Pick / Damping / BodyWet)
-- 楽器切替の fade-out (即時 release ではなく短時間 fade)
+- 楽器切替の fade-out / cross-fade (D63 改訂で Phase 4b 撤回、`PendingInstrumentChange` 状態機械で本実装)
 - Cross-tab preset 同期 (`storage` event)
 - Preset JSON ファイル import / export
 - Mono + Sustain の本実装
+- 複数 Piano 機種プリセット (Grand / Upright / Honkytonk)
+- Hammer Hardness UI 露出
+- Sustain × Sympathetic resonance
+- Piano 高次モード (M=16)
+- Hertz law hammer (Boutillon)
 
 ## ライセンス
 

@@ -1,6 +1,10 @@
+use crate::dispersion::{compute_dispersion_a1, DispersionStage, DISPERSION_STAGES};
 use crate::fractional_delay::ThiranCoeffs;
 use crate::loss_filter::LossFilter;
-use crate::params::{BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, PICK_POSITION_DEFAULT};
+use crate::params::{
+    BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, HAMMER_CUTOFF_HIGH_PIANO, HAMMER_CUTOFF_LOW_PIANO,
+    INHARMONICITY_B_PIANO, PICK_POSITION_DEFAULT,
+};
 use crate::rng::XorShift32;
 use crate::smoothing::SmoothedValue;
 
@@ -50,6 +54,13 @@ pub struct KarplusStrong {
     /// `process_sample` で `(brightness + offset).clamp(0, 1)` として適用。
     /// 初期値 0.0 = brightness offset なし (Phase 3 互換)。
     lfo_brightness_offset: f32,
+    /// Phase 4b D57: Piano kind での Stretching all-pass cascade (M=8 段、heap 確保ゼロ)。
+    /// `dispersion_active = false` の楽器では `process_sample` で skip。
+    /// 各段の a1 は `note_on` 時に `compute_dispersion_a1` で算出して全段共通で代入。
+    dispersion_stages: [DispersionStage; DISPERSION_STAGES],
+    /// Phase 4b D67: `Engine::apply_instrument(Piano)` で true、他 7 楽器 (Default 含む) で false。
+    /// `process_sample` ホットパスでは bool 1 つの分岐のみ、Phase 4a 互換性確保。
+    dispersion_active: bool,
 }
 
 impl KarplusStrong {
@@ -77,6 +88,8 @@ impl KarplusStrong {
             age_samples: 0,
             lfo_pitch_factor: 1.0,
             lfo_brightness_offset: 0.0,
+            dispersion_stages: [DispersionStage::new(); DISPERSION_STAGES],
+            dispersion_active: false,
         }
     }
 
@@ -91,6 +104,35 @@ impl KarplusStrong {
     #[inline(always)]
     pub fn set_lfo_brightness_offset(&mut self, offset: f32) {
         self.lfo_brightness_offset = offset;
+    }
+
+    /// Phase 4b D67: 楽器切替で全 voice に dispersion_active を設定。
+    /// `Engine::apply_instrument` から `pool.set_dispersion_active(active)` 経由で呼ばれる。
+    /// flag の bool 切替のみで heap 操作なし、`apply_instrument` での alloc 0 保証。
+    /// `active = false` のときは念のため状態を reset（次に Piano に切り替えたとき
+    /// 古い z1 が残らないよう）。
+    #[inline(always)]
+    pub fn set_dispersion_active(&mut self, active: bool) {
+        self.dispersion_active = active;
+        if !active {
+            for stage in self.dispersion_stages.iter_mut() {
+                stage.reset();
+            }
+        }
+    }
+
+    /// テスト専用: dispersion 状態の検証用 read-only access。
+    /// `tests/` 配下の integration test は rlib 経由で参照するため `#[cfg(test)]` だと
+    /// 見えず、`#[doc(hidden)]` で公開しつつ docs.rs から隠す手法を採る (`buffer_capacity`
+    /// と同じ Phase 4a 既存パターン)。
+    #[doc(hidden)]
+    pub fn dispersion_active(&self) -> bool {
+        self.dispersion_active
+    }
+
+    #[doc(hidden)]
+    pub fn dispersion_stage_a1(&self, idx: usize) -> f32 {
+        self.dispersion_stages[idx].a1
     }
 
     pub fn prepare(&mut self, sample_rate: f32, _max_block_size: usize) {
@@ -146,12 +188,34 @@ impl KarplusStrong {
         // Brightness LPF (1 段 IIR) の τ_g(b) = (1-b)/b 群遅延がピッチを下方偏移させる
         // ため、note_on 時に raw_length から差し引いて補正する (b=0.5 で 1 sample、b=1.0 で 0)。
         let brightness = self.brightness.target();
-        let tau_g = if brightness > 0.001 {
+        let brightness_tau_g = if brightness > 0.001 {
             ((1.0 - brightness) / brightness).clamp(0.0, raw_len - 3.0)
         } else {
             0.0
         };
-        let adjusted = (raw_len - tau_g).max(3.0);
+
+        // Phase 4b D60: Dispersion cascade の群遅延補正。Piano kind では各段の a1 を
+        // 算出 + 状態クリアし、M·polydel(a1) を adjusted_length から差し引く。
+        // 非 Piano (`dispersion_active = false`) では 0 加算で Phase 4a と完全互換。
+        let dispersion_tau_g = if self.dispersion_active {
+            let (a1, gd_per_stage) = compute_dispersion_a1(
+                DISPERSION_STAGES as u32,
+                INHARMONICITY_B_PIANO,
+                freq_hz,
+                self.sample_rate,
+            );
+            for stage in self.dispersion_stages.iter_mut() {
+                stage.a1 = a1;
+                stage.z1_in = 0.0;
+                stage.z1_out = 0.0;
+            }
+            (DISPERSION_STAGES as f32) * gd_per_stage
+        } else {
+            0.0
+        };
+
+        let total_compensation = brightness_tau_g + dispersion_tau_g;
+        let adjusted = (raw_len - total_compensation).max(3.0);
         let len_int = (adjusted.floor() as usize).clamp(3, max_len_usize);
         let len_frac = (adjusted - len_int as f32).clamp(0.0, 1.0);
 
@@ -161,20 +225,40 @@ impl KarplusStrong {
         self.thiran.reset();
         self.loss_filter.set_for_frequency(freq_hz);
 
-        // Pick position 励振 shaping: noise burst を `buffer[i] -= buffer[i - K]` で
-        // in-place comb 整形。K = round(β · length_int)、length_int-1 へ clamp。
+        // Phase 4b D61: buffer 初期化を pluck (Phase 1〜4a 既存) / hammer (Piano kind) で分岐。
+        // 共通の buffer ゼロクリアは分岐前で実施。
         for v in self.buffer.iter_mut() {
             *v = 0.0;
         }
-        for i in 0..len_int {
-            self.buffer[i] = self.rng.next_unit_bipolar() * velocity;
-        }
-        let k = (self.pick_position * len_int as f32)
-            .round()
-            .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
-        if k > 0 {
-            for i in (k..len_int).rev() {
-                self.buffer[i] -= self.buffer[i - k];
+        if self.dispersion_active {
+            // === Hammer 経路 (Commuted impulse + velocity-dependent 1pole IIR LPF) ===
+            // 単位 impulse + velocity 依存 1pole IIR LPF: cutoff = lerp(LOW, HIGH, velocity)、
+            // α = 1 - exp(-2π·fc/fs) を算出して `y[n] = α·x[n] + (1-α)·y[n-1]`。
+            // Pick position は適用しない (hammer は固定位置、ピアノ物理として整合)。
+            self.buffer[0] = velocity;
+            let cutoff_hz = HAMMER_CUTOFF_LOW_PIANO
+                + velocity.clamp(0.0, 1.0) * (HAMMER_CUTOFF_HIGH_PIANO - HAMMER_CUTOFF_LOW_PIANO);
+            let alpha = (1.0 - (-2.0 * core::f32::consts::PI * cutoff_hz / self.sample_rate).exp())
+                .clamp(0.001, 0.999);
+            let mut z = 0.0_f32;
+            for i in 0..len_int {
+                z = alpha * self.buffer[i] + (1.0 - alpha) * z;
+                self.buffer[i] = z;
+            }
+        } else {
+            // === Pluck 経路 (Phase 1〜4a 既存、Default + 6 楽器) ===
+            // noise burst を `buffer[i] -= buffer[i - K]` で in-place comb 整形。
+            // K = round(β · length_int)、length_int-1 へ clamp。
+            for i in 0..len_int {
+                self.buffer[i] = self.rng.next_unit_bipolar() * velocity;
+            }
+            let k = (self.pick_position * len_int as f32)
+                .round()
+                .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
+            if k > 0 {
+                for i in (k..len_int).rev() {
+                    self.buffer[i] -= self.buffer[i - k];
+                }
             }
         }
 
@@ -287,6 +371,11 @@ impl KarplusStrong {
         // Phase 4a: LFO 適用値を初期状態へ (Phase 3 互換)
         self.lfo_pitch_factor = 1.0;
         self.lfo_brightness_offset = 0.0;
+        // Phase 4b D67: dispersion を完全初期化 (Default kind に戻る前提)
+        self.dispersion_active = false;
+        for stage in self.dispersion_stages.iter_mut() {
+            *stage = DispersionStage::new();
+        }
     }
 
     #[inline(always)]
@@ -314,7 +403,17 @@ impl KarplusStrong {
         // `% length_int` だと write/read で異なる剰余系になり buffer の論理長が破綻する。
         let read_z = (self.write_index + buf_len - self.length_int) % buf_len;
 
-        let read_value = self.thiran.process(self.buffer[read_z]);
+        // Phase 4b D60: Dispersion cascade を Thiran の前段に挿入。
+        // `dispersion_active = false` 経路は Phase 4a と完全一致 (D67 互換性核心)。
+        let read_value = if self.dispersion_active {
+            let mut x = self.buffer[read_z];
+            for stage in self.dispersion_stages.iter_mut() {
+                x = stage.process(x);
+            }
+            self.thiran.process(x)
+        } else {
+            self.thiran.process(self.buffer[read_z])
+        };
 
         // Phase 4a D48: brightness LPF に LFO offset を加算してから clamp。
         let b = (self.brightness.next_sample() + self.lfo_brightness_offset).clamp(0.0, 1.0);
@@ -487,6 +586,102 @@ mod excitation_tests {
             max_abs > 0.0 && max_abs <= 0.8 + 1e-6,
             "noise burst out of range: {}",
             max_abs
+        );
+    }
+
+    /// Phase 4b D61: dispersion_active=true で hammer 経路 (Commuted impulse + velocity LPF)
+    /// が使われる。pluck 経路の noise burst では隣接 sample 間の符号反転が頻発するが、
+    /// hammer 経路では impulse + LPF 平滑化のため buffer 前半が単調減衰となる。
+    #[test]
+    fn test_note_on_with_dispersion_active_uses_hammer_excitation() {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        v.set_dispersion_active(true);
+        v.note_on(440.0, 0.8);
+
+        let snapshot = v.excitation_snapshot();
+        // hammer 経路: buffer[0] が impulse の平滑化結果として最大、続く buffer[i] が
+        // 1pole LPF の応答で単調減衰。velocity=0.8 で cutoff = 800 + 0.8*3200 = 3360 Hz、
+        // alpha = 1 - exp(-2π·3360/48000) ≈ 0.357、y[1] = α·0 + (1-α)·y[0] ≈ 0.643·y[0]
+        assert!(
+            snapshot[0].abs() > 0.0,
+            "buffer[0] must carry impulse energy, got {}",
+            snapshot[0]
+        );
+        let r = snapshot[1] / snapshot[0];
+        assert!(
+            (0.4..=0.95).contains(&r),
+            "1pole LPF decay ratio buffer[1]/buffer[0] should be in [0.4, 0.95], got {}",
+            r
+        );
+        // 単調減衰 (符号変化なし) を最低 4 sample まで確認
+        for i in 1..4.min(snapshot.len()) {
+            assert!(
+                snapshot[i].signum() == snapshot[0].signum() || snapshot[i].abs() < 1.0e-9,
+                "hammer LPF should produce monotonic decay without sign change, buf[{}]={}",
+                i,
+                snapshot[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_note_on_with_dispersion_inactive_uses_pluck_excitation() {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        assert!(!v.dispersion_active());
+        v.note_on(440.0, 0.8);
+
+        let snapshot = v.excitation_snapshot();
+        // pluck 経路: noise burst なので隣接 sample で頻繁に符号変化が起きる
+        let mut sign_changes = 0;
+        for i in 1..snapshot.len() {
+            if snapshot[i].signum() != snapshot[i - 1].signum() {
+                sign_changes += 1;
+            }
+        }
+        // Pluck noise burst: 全 sample のうち 1/4 以上で符号変化があるはず
+        assert!(
+            sign_changes >= snapshot.len() / 4,
+            "pluck noise should have many sign changes, got {} of {}",
+            sign_changes,
+            snapshot.len()
+        );
+    }
+
+    #[test]
+    fn test_hammer_velocity_affects_brightness() {
+        // velocity が高いほど cutoff が高く (= 1pole LPF が浅く) なり、buffer の高域成分が増える。
+        // 高域成分の指標として、隣接 sample 差分の RMS を使う (差分は HPF 等価)。
+        fn diff_rms(buf: &[f32]) -> f32 {
+            let mut sum = 0.0_f64;
+            for i in 1..buf.len() {
+                let d = (buf[i] - buf[i - 1]) as f64;
+                sum += d * d;
+            }
+            (sum / (buf.len() - 1) as f64).sqrt() as f32
+        }
+
+        let mut v_soft = KarplusStrong::new();
+        v_soft.prepare(SAMPLE_RATE, 128);
+        v_soft.set_dispersion_active(true);
+        v_soft.note_on(440.0, 0.1);
+        let buf_soft = v_soft.excitation_snapshot();
+
+        let mut v_hard = KarplusStrong::new();
+        v_hard.prepare(SAMPLE_RATE, 128);
+        v_hard.set_dispersion_active(true);
+        v_hard.note_on(440.0, 1.0);
+        let buf_hard = v_hard.excitation_snapshot();
+
+        let rms_soft = diff_rms(&buf_soft);
+        let rms_hard = diff_rms(&buf_hard);
+        // hard の方が cutoff が高い (= 高域多い) ので diff_rms は大きい
+        assert!(
+            rms_hard > rms_soft,
+            "hard velocity should produce higher diff_rms, soft={}, hard={}",
+            rms_soft,
+            rms_hard
         );
     }
 }

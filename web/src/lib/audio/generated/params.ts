@@ -212,6 +212,30 @@ export const BODY_MODES_SITAR_R: readonly BodyMode[] = [
 	{ freq: 2300, q: 118.80000000000001, gain: 0.27 }
 ] as const;
 
+export const STEREO_SPREAD_PIANO = 0.05;
+
+export const BODY_MODES_PIANO_L: readonly BodyMode[] = [
+	{ freq: 55, q: 10, gain: 1 },
+	{ freq: 110, q: 12, gain: 0.85 },
+	{ freq: 175, q: 15, gain: 0.7 },
+	{ freq: 280, q: 18, gain: 0.55 },
+	{ freq: 460, q: 22, gain: 0.45 },
+	{ freq: 750, q: 28, gain: 0.35 },
+	{ freq: 1300, q: 35, gain: 0.28 },
+	{ freq: 2200, q: 40, gain: 0.22 }
+] as const;
+
+export const BODY_MODES_PIANO_R: readonly BodyMode[] = [
+	{ freq: 57.75, q: 9.5, gain: 1.05 },
+	{ freq: 104.5, q: 12.600000000000001, gain: 0.8925 },
+	{ freq: 183.75, q: 14.25, gain: 0.735 },
+	{ freq: 266, q: 18.900000000000002, gain: 0.5775000000000001 },
+	{ freq: 483, q: 20.9, gain: 0.47250000000000003 },
+	{ freq: 712.5, q: 29.400000000000002, gain: 0.3675 },
+	{ freq: 1365, q: 33.25, gain: 0.29400000000000004 },
+	{ freq: 2090, q: 42, gain: 0.231 }
+] as const;
+
 // Phase 3 互換: Default kind の alias
 export const BODY_MODES_L = BODY_MODES_DEFAULT_L;
 export const BODY_MODES_R = BODY_MODES_DEFAULT_R;
@@ -224,10 +248,15 @@ export const INSTRUMENT_KIND = {
 	Mandolin: 3,
 	Bass: 4,
 	GuitarSteel: 5,
-	Sitar: 6
+	Sitar: 6,
+	Piano: 7
 } as const;
 
 export type InstrumentKindKey = keyof typeof INSTRUMENT_KIND;
 export type InstrumentKindValue = (typeof INSTRUMENT_KIND)[InstrumentKindKey];
 
-export const INSTRUMENT_KIND_COUNT = 7;
+export const INSTRUMENT_KIND_COUNT = 8;
+
+export const INHARMONICITY_B_PIANO = 0.00075;
+export const HAMMER_CUTOFF_LOW_PIANO = 800;
+export const HAMMER_CUTOFF_HIGH_PIANO = 4000;

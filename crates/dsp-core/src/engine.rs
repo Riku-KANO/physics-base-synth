@@ -303,10 +303,14 @@ impl Engine {
         self.voice_state_buffer.as_ptr()
     }
 
-    /// Phase 4a D52 / D53: 楽器プリセット切替。
+    /// Phase 4a D52 / D53 + Phase 4b D67: 楽器プリセット切替。
     /// 全 voice 即時 release → hold_stack / sustain_state クリア → current_instrument 更新
-    /// → ModalBodyResonator の係数差し替え + state クリア。
-    /// fade-out なしの即時 release は UX で「楽器切替時は音が切れます」を UI で告知 (D53)。
+    /// → ModalBodyResonator の係数差し替え + state クリア → dispersion_active fan-out。
+    /// `SmoothedValue::set_target` は target 代入のみで current は `next_sample()` でしか
+    /// 進まないため、同期メソッド内で fade-out は実現不能。Phase 4a D53「即時 release」を
+    /// 完全継承し、`pool.set_dispersion_active(matches!(kind, Piano))` の 1 行を追加するのみ。
+    /// pop noise 軽減 (fade-out / cross-fade) は Phase 4c の `PendingInstrumentChange`
+    /// 状態機械で再実装する候補。
     pub fn apply_instrument(&mut self, kind: InstrumentKind) {
         self.pool.all_notes_off();
         self.hold_stack.clear();
@@ -314,6 +318,11 @@ impl Engine {
         self.current_instrument = kind;
         self.stereo_spread = stereo_spread_for_instrument(kind);
         self.modal_body.set_instrument(kind, self.sample_rate);
+
+        // Phase 4b D67: dispersion_active を全 voice に fan-out。Piano kind では
+        // process_sample で 8 段 cascade を経由、他 7 楽器 (Default 含む) では skip。
+        let dispersion_active = matches!(kind, InstrumentKind::Piano);
+        self.pool.set_dispersion_active(dispersion_active);
     }
 
     /// Phase 4a D46: LFO レート設定 (0.1〜8.0 Hz、SmoothedValue tau=0.05s で平滑化)。
@@ -505,6 +514,8 @@ impl AudioProcessor for Engine {
         // Phase 4a D52 / D53: reset で modal_body も Default 楽器係数に戻す。
         self.modal_body
             .set_instrument(InstrumentKind::Default, self.sample_rate);
+        // Phase 4b D67: Default kind に戻るため dispersion_active も false に
+        self.pool.set_dispersion_active(false);
     }
 }
 

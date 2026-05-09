@@ -264,6 +264,12 @@ export class SynthEngine {
 		return this.ready;
 	}
 
+	// Phase 4b D66: dev-only timing 計測用。`__synthDev.measureProcessTime` から
+	// 参照する Worklet の MessagePort を返す。Worklet 未初期化時は null。
+	workletPort(): MessagePort | null {
+		return this.node?.port ?? null;
+	}
+
 	async dispose(): Promise<void> {
 		if (this.rafHandle !== null) {
 			cancelAnimationFrame(this.rafHandle);
