@@ -1,6 +1,9 @@
+use crate::dispersion::{compute_dispersion_a1, DispersionStage, DISPERSION_STAGES};
 use crate::fractional_delay::ThiranCoeffs;
 use crate::loss_filter::LossFilter;
-use crate::params::{BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, PICK_POSITION_DEFAULT};
+use crate::params::{
+    BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, INHARMONICITY_B_PIANO, PICK_POSITION_DEFAULT,
+};
 use crate::rng::XorShift32;
 use crate::smoothing::SmoothedValue;
 
@@ -50,6 +53,13 @@ pub struct KarplusStrong {
     /// `process_sample` で `(brightness + offset).clamp(0, 1)` として適用。
     /// 初期値 0.0 = brightness offset なし (Phase 3 互換)。
     lfo_brightness_offset: f32,
+    /// Phase 4b D57: Piano kind での Stretching all-pass cascade (M=8 段、heap 確保ゼロ)。
+    /// `dispersion_active = false` の楽器では `process_sample` で skip。
+    /// 各段の a1 は `note_on` 時に `compute_dispersion_a1` で算出して全段共通で代入。
+    dispersion_stages: [DispersionStage; DISPERSION_STAGES],
+    /// Phase 4b D67: `Engine::apply_instrument(Piano)` で true、他 7 楽器 (Default 含む) で false。
+    /// `process_sample` ホットパスでは bool 1 つの分岐のみ、Phase 4a 互換性確保。
+    dispersion_active: bool,
 }
 
 impl KarplusStrong {
@@ -77,6 +87,8 @@ impl KarplusStrong {
             age_samples: 0,
             lfo_pitch_factor: 1.0,
             lfo_brightness_offset: 0.0,
+            dispersion_stages: [DispersionStage::new(); DISPERSION_STAGES],
+            dispersion_active: false,
         }
     }
 
@@ -91,6 +103,32 @@ impl KarplusStrong {
     #[inline(always)]
     pub fn set_lfo_brightness_offset(&mut self, offset: f32) {
         self.lfo_brightness_offset = offset;
+    }
+
+    /// Phase 4b D67: 楽器切替で全 voice に dispersion_active を設定。
+    /// `Engine::apply_instrument` から `pool.set_dispersion_active(active)` 経由で呼ばれる。
+    /// flag の bool 切替のみで heap 操作なし、`apply_instrument` での alloc 0 保証。
+    /// `active = false` のときは念のため状態を reset（次に Piano に切り替えたとき
+    /// 古い z1 が残らないよう）。
+    #[inline(always)]
+    pub fn set_dispersion_active(&mut self, active: bool) {
+        self.dispersion_active = active;
+        if !active {
+            for stage in self.dispersion_stages.iter_mut() {
+                stage.reset();
+            }
+        }
+    }
+
+    /// テスト専用: dispersion 状態の検証用 read-only access。
+    #[doc(hidden)]
+    pub fn dispersion_active(&self) -> bool {
+        self.dispersion_active
+    }
+
+    #[doc(hidden)]
+    pub fn dispersion_stage_a1(&self, idx: usize) -> f32 {
+        self.dispersion_stages[idx].a1
     }
 
     pub fn prepare(&mut self, sample_rate: f32, _max_block_size: usize) {
@@ -146,12 +184,34 @@ impl KarplusStrong {
         // Brightness LPF (1 段 IIR) の τ_g(b) = (1-b)/b 群遅延がピッチを下方偏移させる
         // ため、note_on 時に raw_length から差し引いて補正する (b=0.5 で 1 sample、b=1.0 で 0)。
         let brightness = self.brightness.target();
-        let tau_g = if brightness > 0.001 {
+        let brightness_tau_g = if brightness > 0.001 {
             ((1.0 - brightness) / brightness).clamp(0.0, raw_len - 3.0)
         } else {
             0.0
         };
-        let adjusted = (raw_len - tau_g).max(3.0);
+
+        // Phase 4b D60: Dispersion cascade の群遅延補正。Piano kind では各段の a1 を
+        // 算出 + 状態クリアし、M·polydel(a1) を adjusted_length から差し引く。
+        // 非 Piano (`dispersion_active = false`) では 0 加算で Phase 4a と完全互換。
+        let dispersion_tau_g = if self.dispersion_active {
+            let (a1, gd_per_stage) = compute_dispersion_a1(
+                DISPERSION_STAGES as u32,
+                INHARMONICITY_B_PIANO,
+                freq_hz,
+                self.sample_rate,
+            );
+            for stage in self.dispersion_stages.iter_mut() {
+                stage.a1 = a1;
+                stage.z1_in = 0.0;
+                stage.z1_out = 0.0;
+            }
+            (DISPERSION_STAGES as f32) * gd_per_stage
+        } else {
+            0.0
+        };
+
+        let total_compensation = brightness_tau_g + dispersion_tau_g;
+        let adjusted = (raw_len - total_compensation).max(3.0);
         let len_int = (adjusted.floor() as usize).clamp(3, max_len_usize);
         let len_frac = (adjusted - len_int as f32).clamp(0.0, 1.0);
 
@@ -287,6 +347,11 @@ impl KarplusStrong {
         // Phase 4a: LFO 適用値を初期状態へ (Phase 3 互換)
         self.lfo_pitch_factor = 1.0;
         self.lfo_brightness_offset = 0.0;
+        // Phase 4b D67: dispersion を完全初期化 (Default kind に戻る前提)
+        self.dispersion_active = false;
+        for stage in self.dispersion_stages.iter_mut() {
+            *stage = DispersionStage::new();
+        }
     }
 
     #[inline(always)]
