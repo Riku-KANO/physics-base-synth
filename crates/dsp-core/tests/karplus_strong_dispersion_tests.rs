@@ -88,6 +88,10 @@ fn test_set_dispersion_active_false_resets_stages() {
     );
 }
 
+// hammer / pluck の励振 buffer を覗くテストは `excitation_snapshot` (cfg(test) 限定)
+// を使うため、Phase 4a の流儀に倣い `crates/dsp-core/src/karplus_strong.rs` 内の
+// `mod excitation_tests` に hammer 系テスト 3 件を配置している (Step 8 で追加)。
+
 /// Phase 4b D67 の核心テスト。Default kind / Mod Wheel=0 / LFO depth=0 で
 /// Phase 4b の `dispersion_active = false` 経路の出力が、Phase 4a HEAD の
 /// 出力と ε=1e-6 でバイト一致することを保証する。

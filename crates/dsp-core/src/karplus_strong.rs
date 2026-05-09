@@ -2,7 +2,8 @@ use crate::dispersion::{compute_dispersion_a1, DispersionStage, DISPERSION_STAGE
 use crate::fractional_delay::ThiranCoeffs;
 use crate::loss_filter::LossFilter;
 use crate::params::{
-    BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, INHARMONICITY_B_PIANO, PICK_POSITION_DEFAULT,
+    BRIGHTNESS_DEFAULT, DAMPING_DEFAULT, HAMMER_CUTOFF_HIGH_PIANO, HAMMER_CUTOFF_LOW_PIANO,
+    INHARMONICITY_B_PIANO, PICK_POSITION_DEFAULT,
 };
 use crate::rng::XorShift32;
 use crate::smoothing::SmoothedValue;
@@ -221,20 +222,43 @@ impl KarplusStrong {
         self.thiran.reset();
         self.loss_filter.set_for_frequency(freq_hz);
 
-        // Pick position 励振 shaping: noise burst を `buffer[i] -= buffer[i - K]` で
-        // in-place comb 整形。K = round(β · length_int)、length_int-1 へ clamp。
-        for v in self.buffer.iter_mut() {
-            *v = 0.0;
-        }
-        for i in 0..len_int {
-            self.buffer[i] = self.rng.next_unit_bipolar() * velocity;
-        }
-        let k = (self.pick_position * len_int as f32)
-            .round()
-            .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
-        if k > 0 {
-            for i in (k..len_int).rev() {
-                self.buffer[i] -= self.buffer[i - k];
+        // Phase 4b D61: buffer 初期化を pluck (Phase 1〜4a 既存) / hammer (Piano kind) で分岐。
+        if self.dispersion_active {
+            // === Hammer 経路 (Commuted impulse + velocity-dependent 1pole IIR LPF) ===
+            // 1) 単位 impulse を buffer[0] に配置、それ以外は 0
+            for v in self.buffer.iter_mut() {
+                *v = 0.0;
+            }
+            self.buffer[0] = velocity;
+            // 2) Velocity 依存 1pole IIR LPF: cutoff = lerp(LOW, HIGH, velocity)、
+            //    α = 1 - exp(-2π·fc/fs) を算出して `y[n] = α·x[n] + (1-α)·y[n-1]` で平滑化
+            let cutoff_hz = HAMMER_CUTOFF_LOW_PIANO
+                + velocity.clamp(0.0, 1.0) * (HAMMER_CUTOFF_HIGH_PIANO - HAMMER_CUTOFF_LOW_PIANO);
+            let alpha = (1.0 - (-2.0 * core::f32::consts::PI * cutoff_hz / self.sample_rate).exp())
+                .clamp(0.001, 0.999);
+            let mut z = 0.0_f32;
+            for i in 0..len_int {
+                z = alpha * self.buffer[i] + (1.0 - alpha) * z;
+                self.buffer[i] = z;
+            }
+            // Pick position は適用しない (hammer は固定位置、ピアノ物理として整合)
+        } else {
+            // === Pluck 経路 (Phase 1〜4a 既存、Default + 6 楽器) ===
+            // noise burst を `buffer[i] -= buffer[i - K]` で in-place comb 整形。
+            // K = round(β · length_int)、length_int-1 へ clamp。
+            for v in self.buffer.iter_mut() {
+                *v = 0.0;
+            }
+            for i in 0..len_int {
+                self.buffer[i] = self.rng.next_unit_bipolar() * velocity;
+            }
+            let k = (self.pick_position * len_int as f32)
+                .round()
+                .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
+            if k > 0 {
+                for i in (k..len_int).rev() {
+                    self.buffer[i] -= self.buffer[i - k];
+                }
             }
         }
 
@@ -562,6 +586,102 @@ mod excitation_tests {
             max_abs > 0.0 && max_abs <= 0.8 + 1e-6,
             "noise burst out of range: {}",
             max_abs
+        );
+    }
+
+    /// Phase 4b D61: dispersion_active=true で hammer 経路 (Commuted impulse + velocity LPF)
+    /// が使われる。pluck 経路の noise burst では隣接 sample 間の符号反転が頻発するが、
+    /// hammer 経路では impulse + LPF 平滑化のため buffer 前半が単調減衰となる。
+    #[test]
+    fn test_note_on_with_dispersion_active_uses_hammer_excitation() {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        v.set_dispersion_active(true);
+        v.note_on(440.0, 0.8);
+
+        let snapshot = v.excitation_snapshot();
+        // hammer 経路: buffer[0] が impulse の平滑化結果として最大、続く buffer[i] が
+        // 1pole LPF の応答で単調減衰。velocity=0.8 で cutoff = 800 + 0.8*3200 = 3360 Hz、
+        // alpha = 1 - exp(-2π·3360/48000) ≈ 0.357、y[1] = α·0 + (1-α)·y[0] ≈ 0.643·y[0]
+        assert!(
+            snapshot[0].abs() > 0.0,
+            "buffer[0] must carry impulse energy, got {}",
+            snapshot[0]
+        );
+        let r = snapshot[1] / snapshot[0];
+        assert!(
+            (0.4..=0.95).contains(&r),
+            "1pole LPF decay ratio buffer[1]/buffer[0] should be in [0.4, 0.95], got {}",
+            r
+        );
+        // 単調減衰 (符号変化なし) を最低 4 sample まで確認
+        for i in 1..4.min(snapshot.len()) {
+            assert!(
+                snapshot[i].signum() == snapshot[0].signum() || snapshot[i].abs() < 1.0e-9,
+                "hammer LPF should produce monotonic decay without sign change, buf[{}]={}",
+                i,
+                snapshot[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_note_on_with_dispersion_inactive_uses_pluck_excitation() {
+        let mut v = KarplusStrong::new();
+        v.prepare(SAMPLE_RATE, 128);
+        assert!(!v.dispersion_active());
+        v.note_on(440.0, 0.8);
+
+        let snapshot = v.excitation_snapshot();
+        // pluck 経路: noise burst なので隣接 sample で頻繁に符号変化が起きる
+        let mut sign_changes = 0;
+        for i in 1..snapshot.len() {
+            if snapshot[i].signum() != snapshot[i - 1].signum() {
+                sign_changes += 1;
+            }
+        }
+        // Pluck noise burst: 全 sample のうち 1/4 以上で符号変化があるはず
+        assert!(
+            sign_changes >= snapshot.len() / 4,
+            "pluck noise should have many sign changes, got {} of {}",
+            sign_changes,
+            snapshot.len()
+        );
+    }
+
+    #[test]
+    fn test_hammer_velocity_affects_brightness() {
+        // velocity が高いほど cutoff が高く (= 1pole LPF が浅く) なり、buffer の高域成分が増える。
+        // 高域成分の指標として、隣接 sample 差分の RMS を使う (差分は HPF 等価)。
+        fn diff_rms(buf: &[f32]) -> f32 {
+            let mut sum = 0.0_f64;
+            for i in 1..buf.len() {
+                let d = (buf[i] - buf[i - 1]) as f64;
+                sum += d * d;
+            }
+            (sum / (buf.len() - 1) as f64).sqrt() as f32
+        }
+
+        let mut v_soft = KarplusStrong::new();
+        v_soft.prepare(SAMPLE_RATE, 128);
+        v_soft.set_dispersion_active(true);
+        v_soft.note_on(440.0, 0.1);
+        let buf_soft = v_soft.excitation_snapshot();
+
+        let mut v_hard = KarplusStrong::new();
+        v_hard.prepare(SAMPLE_RATE, 128);
+        v_hard.set_dispersion_active(true);
+        v_hard.note_on(440.0, 1.0);
+        let buf_hard = v_hard.excitation_snapshot();
+
+        let rms_soft = diff_rms(&buf_soft);
+        let rms_hard = diff_rms(&buf_hard);
+        // hard の方が cutoff が高い (= 高域多い) ので diff_rms は大きい
+        assert!(
+            rms_hard > rms_soft,
+            "hard velocity should produce higher diff_rms, soft={}, hard={}",
+            rms_soft,
+            rms_hard
         );
     }
 }
