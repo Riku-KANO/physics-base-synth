@@ -186,6 +186,8 @@ Svelte UI (main thread) ── MessagePort ─→ AudioWorkletProcessor
 
 ## Phase 4b で追加された機能
 
+> **Note: Piano 音色の聴感は KS ベースの構造的限界で「弦楽器寄り」になります。** 仕様書策定時から想定された制約で、Karplus–Strong ループ自体が弦のシミュレーションであること、Hammer model が impulse + 1pole LPF の近似であること、複数弦 (1-3 弦/note) と sympathetic resonance が未実装であることが原因です。本物のピアノ音色は Phase 4c で Multi-string + Hertz law hammer (Boutillon) + Sympathetic resonance + Soundboard モード増 (M=16) 等の構造拡張で追求する候補です。詳細は `docs/retrospective/2026-05-09-005-phase4b.md` §5 / §7。
+
 - **ピアノ音色 (D56-D62)**: 8 番目の楽器 `InstrumentKind::Piano = 7` を追加。
   - **Stretching all-pass cascade (D57/D58/D59)**: M=8 段の 1 次 allpass を KS ループに直列、Rauhala-Välimäki 2006 closed-form で a1 を算出。Piano `inharmonicity_b = 7.5e-4` (A4 基準) で stiff string の `f_n = n·f_0·√(1+B·n²)` を再現。
   - **Hammer model (D61)**: `note_on` の buffer 初期化を pluck/hammer で分岐。Piano は **Commuted impulse + velocity-dependent 1pole IIR LPF** (cutoff = lerp(800Hz, 4000Hz, velocity)) で felt hammer を近似。
