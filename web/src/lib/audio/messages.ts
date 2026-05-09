@@ -17,7 +17,8 @@ export type InstrumentKindKey =
 	| 'mandolin'
 	| 'bass'
 	| 'guitar_steel'
-	| 'sitar';
+	| 'sitar'
+	| 'piano'; // Phase 4b D62
 
 export type ToWorkletMessage =
 	| { type: 'init'; wasmBytes: ArrayBuffer; sampleRate: number }

@@ -62,7 +62,8 @@ const INSTRUMENT_KIND_MAP: Record<InstrumentKindKey, number> = {
 	mandolin: 3,
 	bass: 4,
 	guitar_steel: 5,
-	sitar: 6
+	sitar: 6,
+	piano: 7 // Phase 4b D62
 };
 
 const FRAMES = 128;
