@@ -30,8 +30,18 @@ export const synth = new SynthState();
 if (import.meta.env.DEV) {
 	type DevDiagnostics = {
 		setMode: (mode: 'poly' | 'mono') => void;
+		// Phase 4b D66: F38b 計測自動化スクリプト
+		measureProcessTime: (durationMs: number) => Promise<unknown>;
 	};
 	(globalThis as unknown as { __synthDev?: DevDiagnostics }).__synthDev = {
-		setMode: (mode) => synth.engine.setMode(mode)
+		setMode: (mode) => synth.engine.setMode(mode),
+		measureProcessTime: async (durationMs: number) => {
+			const port = synth.engine.workletPort();
+			if (!port) {
+				throw new Error('Worklet not initialized, call StartButton first');
+			}
+			const { measureProcessTime } = await import('$lib/audio/__synthDev');
+			return measureProcessTime(port, durationMs);
+		}
 	};
 }
