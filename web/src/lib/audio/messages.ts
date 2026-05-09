@@ -36,11 +36,16 @@ export type ToWorkletMessage =
 	| { type: 'lfoSetRate'; hz: number }
 	| { type: 'lfoSetWaveform'; kind: LfoWaveformKey }
 	| { type: 'lfoSetDepth'; dest: LfoDestinationKey; depth: number }
-	| { type: 'applyInstrument'; kind: InstrumentKindKey };
+	| { type: 'applyInstrument'; kind: InstrumentKindKey }
+	// Phase 4b D66: F38b 計測自動化スクリプト用 (dev only)
+	| { type: 'startTimingCapture' }
+	| { type: 'stopTimingCapture' };
 
 export type FromWorkletMessage =
 	| { type: 'ready' }
 	| { type: 'error'; message: string }
 	| { type: 'debug'; message: string }
 	// Phase 3 D41: Voice State (active mask + 8 振幅、1024 sample 毎に push)。
-	| { type: 'voiceState'; activeMask: number; amplitudes: Float32Array };
+	| { type: 'voiceState'; activeMask: number; amplitudes: Float32Array }
+	// Phase 4b D66: F38b 計測値の集約 (dev only)。samples は process 1 回ごとの self time (ms)。
+	| { type: 'timing'; samples: number[]; bufferOverflow: boolean };
