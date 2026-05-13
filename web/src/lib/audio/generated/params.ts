@@ -223,14 +223,14 @@ export const BODY_MODES_PIANO_L: readonly BodyMode[] = [
 	{ freq: 750, q: 28, gain: 0.35 },
 	{ freq: 1300, q: 35, gain: 0.28 },
 	{ freq: 2200, q: 40, gain: 0.22 },
-	{ freq: 3200, q: 45, gain: 0.18 },
-	{ freq: 4500, q: 50, gain: 0.14 },
-	{ freq: 6200, q: 55, gain: 0.11 },
-	{ freq: 8500, q: 60, gain: 0.09 },
-	{ freq: 11000, q: 65, gain: 0.07 },
-	{ freq: 13500, q: 70, gain: 0.06 },
-	{ freq: 16000, q: 75, gain: 0.05 },
-	{ freq: 19000, q: 80, gain: 0.04 }
+	{ freq: 3200, q: 45, gain: 0.36 },
+	{ freq: 4500, q: 50, gain: 0.28 },
+	{ freq: 6200, q: 55, gain: 0.22 },
+	{ freq: 8500, q: 60, gain: 0.18 },
+	{ freq: 11000, q: 65, gain: 0.14 },
+	{ freq: 13500, q: 70, gain: 0.12 },
+	{ freq: 16000, q: 75, gain: 0.1 },
+	{ freq: 19000, q: 80, gain: 0.08 }
 ] as const;
 
 export const BODY_MODES_PIANO_R: readonly BodyMode[] = [
@@ -242,14 +242,14 @@ export const BODY_MODES_PIANO_R: readonly BodyMode[] = [
 	{ freq: 712.5, q: 29.400000000000002, gain: 0.3675 },
 	{ freq: 1365, q: 33.25, gain: 0.29400000000000004 },
 	{ freq: 2090, q: 42, gain: 0.231 },
-	{ freq: 3360, q: 42.75, gain: 0.189 },
-	{ freq: 4275, q: 52.5, gain: 0.14700000000000002 },
-	{ freq: 6510, q: 52.25, gain: 0.1155 },
-	{ freq: 8075, q: 63, gain: 0.0945 },
-	{ freq: 11550, q: 61.75, gain: 0.07350000000000001 },
-	{ freq: 12825, q: 73.5, gain: 0.063 },
-	{ freq: 16800, q: 71.25, gain: 0.052500000000000005 },
-	{ freq: 18050, q: 84, gain: 0.042 }
+	{ freq: 3360, q: 42.75, gain: 0.378 },
+	{ freq: 4275, q: 52.5, gain: 0.29400000000000004 },
+	{ freq: 6510, q: 52.25, gain: 0.231 },
+	{ freq: 8075, q: 63, gain: 0.189 },
+	{ freq: 11550, q: 61.75, gain: 0.14700000000000002 },
+	{ freq: 12825, q: 73.5, gain: 0.126 },
+	{ freq: 16800, q: 71.25, gain: 0.10500000000000001 },
+	{ freq: 18050, q: 84, gain: 0.084 }
 ] as const;
 
 // Phase 3 互換: Default kind の alias
@@ -275,7 +275,7 @@ export const INSTRUMENT_KIND_COUNT = 8;
 
 export const INHARMONICITY_B_PIANO = 0.00075;
 export const HAMMER_CUTOFF_LOW_PIANO = 800;
-export const HAMMER_CUTOFF_HIGH_PIANO = 5500;
+export const HAMMER_CUTOFF_HIGH_PIANO = 6500;
 export const UNISON_DETUNE_CENTS_PIANO = 1.5;
 export const SYMPATHETIC_AMOUNT_PIANO = 1;
 

@@ -319,8 +319,9 @@ fn test_piano_specific_constants() {
     assert!((INHARMONICITY_B_PIANO - 7.5e-4).abs() < 1e-9);
     assert!((HAMMER_CUTOFF_LOW_PIANO - 800.0).abs() < 1e-3);
     // Phase 4c D75: hammer cutoff upper bound was raised from 4000 Hz (Phase 4b)
-    // to 5500 Hz as part of the Hertz law raised cosine hammer redesign.
-    assert!((HAMMER_CUTOFF_HIGH_PIANO - 5500.0).abs() < 1e-3);
+    // to 5500 Hz as part of the Hertz law raised cosine hammer redesign,
+    // then to 6500 Hz in R44 緩和策 1 (Step 18 pass 1) for more attack brightness.
+    assert!((HAMMER_CUTOFF_HIGH_PIANO - 6500.0).abs() < 1e-3);
 }
 
 #[test]

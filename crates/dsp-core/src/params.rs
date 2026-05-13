@@ -322,14 +322,14 @@ pub const BODY_MODES_PIANO_L: [BodyMode; 16] = [
     BodyMode { freq: 750.0, q: 28.0, gain: 0.35 },
     BodyMode { freq: 1300.0, q: 35.0, gain: 0.28 },
     BodyMode { freq: 2200.0, q: 40.0, gain: 0.22 },
-    BodyMode { freq: 3200.0, q: 45.0, gain: 0.18 },
-    BodyMode { freq: 4500.0, q: 50.0, gain: 0.14 },
-    BodyMode { freq: 6200.0, q: 55.0, gain: 0.11 },
-    BodyMode { freq: 8500.0, q: 60.0, gain: 0.09 },
-    BodyMode { freq: 11000.0, q: 65.0, gain: 0.07 },
-    BodyMode { freq: 13500.0, q: 70.0, gain: 0.06 },
-    BodyMode { freq: 16000.0, q: 75.0, gain: 0.05 },
-    BodyMode { freq: 19000.0, q: 80.0, gain: 0.04 },
+    BodyMode { freq: 3200.0, q: 45.0, gain: 0.36 },
+    BodyMode { freq: 4500.0, q: 50.0, gain: 0.28 },
+    BodyMode { freq: 6200.0, q: 55.0, gain: 0.22 },
+    BodyMode { freq: 8500.0, q: 60.0, gain: 0.18 },
+    BodyMode { freq: 11000.0, q: 65.0, gain: 0.14 },
+    BodyMode { freq: 13500.0, q: 70.0, gain: 0.12 },
+    BodyMode { freq: 16000.0, q: 75.0, gain: 0.1 },
+    BodyMode { freq: 19000.0, q: 80.0, gain: 0.08 },
 ];
 
 #[rustfmt::skip]
@@ -342,14 +342,14 @@ pub const BODY_MODES_PIANO_R: [BodyMode; 16] = [
     BodyMode { freq: 712.5, q: 29.4, gain: 0.3675 },
     BodyMode { freq: 1365.0, q: 33.25, gain: 0.294 },
     BodyMode { freq: 2090.0, q: 42.0, gain: 0.231 },
-    BodyMode { freq: 3360.0, q: 42.75, gain: 0.189 },
-    BodyMode { freq: 4275.0, q: 52.5, gain: 0.147 },
-    BodyMode { freq: 6510.0, q: 52.25, gain: 0.1155 },
-    BodyMode { freq: 8075.0, q: 63.0, gain: 0.0945 },
-    BodyMode { freq: 11550.0, q: 61.75, gain: 0.0735 },
-    BodyMode { freq: 12825.0, q: 73.5, gain: 0.063 },
-    BodyMode { freq: 16800.0, q: 71.25, gain: 0.0525 },
-    BodyMode { freq: 18050.0, q: 84.0, gain: 0.042 },
+    BodyMode { freq: 3360.0, q: 42.75, gain: 0.378 },
+    BodyMode { freq: 4275.0, q: 52.5, gain: 0.294 },
+    BodyMode { freq: 6510.0, q: 52.25, gain: 0.231 },
+    BodyMode { freq: 8075.0, q: 63.0, gain: 0.189 },
+    BodyMode { freq: 11550.0, q: 61.75, gain: 0.147 },
+    BodyMode { freq: 12825.0, q: 73.5, gain: 0.126 },
+    BodyMode { freq: 16800.0, q: 71.25, gain: 0.105 },
+    BodyMode { freq: 18050.0, q: 84.0, gain: 0.084 },
 ];
 
 // Phase 3 互換: Default kind の alias
@@ -391,7 +391,7 @@ pub const INSTRUMENT_KIND_COUNT: usize = 8;
 
 pub const INHARMONICITY_B_PIANO: f32 = 0.00075;
 pub const HAMMER_CUTOFF_LOW_PIANO: f32 = 800.0;
-pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 5500.0;
+pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 6500.0;
 pub const UNISON_DETUNE_CENTS_PIANO: f32 = 1.5;
 pub const SYMPATHETIC_AMOUNT_PIANO: f32 = 1.0;
 

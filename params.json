@@ -145,7 +145,7 @@
       "stereo_spread": 0.05,
       "inharmonicity_b": 7.5e-4,
       "hammer_cutoff_low_hz": 800.0,
-      "hammer_cutoff_high_hz": 5500.0,
+      "hammer_cutoff_high_hz": 6500.0,
       "unison_detune_cents": 1.5,
       "sympathetic_amount": 1.0,
       "inharmonicity_b_curve": [
@@ -170,14 +170,14 @@
         { "freq": 750.0,   "q": 28.0, "gain": 0.35 },
         { "freq": 1300.0,  "q": 35.0, "gain": 0.28 },
         { "freq": 2200.0,  "q": 40.0, "gain": 0.22 },
-        { "freq": 3200.0,  "q": 45.0, "gain": 0.18 },
-        { "freq": 4500.0,  "q": 50.0, "gain": 0.14 },
-        { "freq": 6200.0,  "q": 55.0, "gain": 0.11 },
-        { "freq": 8500.0,  "q": 60.0, "gain": 0.09 },
-        { "freq": 11000.0, "q": 65.0, "gain": 0.07 },
-        { "freq": 13500.0, "q": 70.0, "gain": 0.06 },
-        { "freq": 16000.0, "q": 75.0, "gain": 0.05 },
-        { "freq": 19000.0, "q": 80.0, "gain": 0.04 }
+        { "freq": 3200.0,  "q": 45.0, "gain": 0.36 },
+        { "freq": 4500.0,  "q": 50.0, "gain": 0.28 },
+        { "freq": 6200.0,  "q": 55.0, "gain": 0.22 },
+        { "freq": 8500.0,  "q": 60.0, "gain": 0.18 },
+        { "freq": 11000.0, "q": 65.0, "gain": 0.14 },
+        { "freq": 13500.0, "q": 70.0, "gain": 0.12 },
+        { "freq": 16000.0, "q": 75.0, "gain": 0.10 },
+        { "freq": 19000.0, "q": 80.0, "gain": 0.08 }
       ]
     }
   ]
