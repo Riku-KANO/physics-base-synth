@@ -264,6 +264,21 @@ impl KarplusStrong {
         self.string_states[string_idx].dispersion_stages[stage_idx].a1
     }
 
+    /// Phase 4c test-only: 指定弦の buffer を複製して返す (F66 hammer 形状検証用)。
+    /// `excitation_snapshot` は `pub(crate)` で integration test から見えないため、
+    /// alloc を伴う複製で代替する (production 経路では使わない)。
+    #[doc(hidden)]
+    pub fn buffer_clone_for_test(&self, string_idx: usize) -> Vec<f32> {
+        self.string_buffers[string_idx].clone()
+    }
+
+    /// Phase 4c test-only: 指定弦の length_int を読む。`length_int()` は string 0 のみのため、
+    /// 複数弦の長さを観測したい F66 で使用。
+    #[doc(hidden)]
+    pub fn length_int_for_string(&self, string_idx: usize) -> usize {
+        self.string_states[string_idx].length_int
+    }
+
     /// Phase 4c D70: 現在 active な弦数。test-only accessor (03 章 §7.5)。
     /// Step 4 時点では常に 1、Step 5 で `n_strings(midi)` 連動。
     #[doc(hidden)]
