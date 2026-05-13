@@ -75,10 +75,14 @@ export const FACTORY_PRESETS: PresetV1[] = [
 		lfo: { rate: 5.5, waveform: 'sine', pitchDepth: 0.4, brightnessDepth: 0.0, volumeDepth: 0.0 }
 	},
 	{
-		// Phase 4b D62: Piano (Stretching all-pass + Hammer model + Modal Body Piano)
+		// Phase 4c D72/D75/D77/D78: Piano (Multi-string 1/2/3 + Hertz hammer + Sympathetic +
+		// B(note) LUT)。聴感チューニング (Step 18-19) で params の調整反復が入る想定。
+		// 開始点は Phase 4b の値 (damping 0.998 / brightness 0.55 / outputGain 0.7 /
+		// pickPosition 0.13 / bodyWet 0.4) で、Phase 4c の DSP 構造変更による聴感差を
+		// 直接観測する基準とする。
 		version: 1,
 		name: 'Piano',
-		createdAt: '2026-05-09T00:00:00.000Z',
+		createdAt: '2026-05-13T00:00:00.000Z',
 		instrument: 'piano',
 		params: {
 			damping: 0.998,
