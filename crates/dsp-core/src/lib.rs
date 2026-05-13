@@ -8,6 +8,7 @@ pub mod loss_filter;
 pub mod modal_body;
 pub mod note_allocator;
 pub mod params;
+pub mod resonance_bus;
 pub mod rng;
 pub mod smoothing;
 pub mod soft_clip;
