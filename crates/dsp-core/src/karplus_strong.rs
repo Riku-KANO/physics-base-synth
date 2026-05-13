@@ -257,6 +257,13 @@ impl KarplusStrong {
         self.string_states[0].dispersion_stages[idx].a1
     }
 
+    /// Phase 4c test-only: 指定弦 (`string_idx`) の dispersion stage a1 を読む。
+    /// F62-b で「3 弦の a1 が detune 反映で異なる」ことを確認するために使用。
+    #[doc(hidden)]
+    pub fn dispersion_stage_a1_for_string(&self, string_idx: usize, stage_idx: usize) -> f32 {
+        self.string_states[string_idx].dispersion_stages[stage_idx].a1
+    }
+
     /// Phase 4c D70: 現在 active な弦数。test-only accessor (03 章 §7.5)。
     /// Step 4 時点では常に 1、Step 5 で `n_strings(midi)` 連動。
     #[doc(hidden)]
