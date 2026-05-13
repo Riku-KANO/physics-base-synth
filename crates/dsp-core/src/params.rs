@@ -375,7 +375,7 @@ pub const INSTRUMENT_KIND_COUNT: usize = 8;
 
 pub const INHARMONICITY_B_PIANO: f32 = 0.00075;
 pub const HAMMER_CUTOFF_LOW_PIANO: f32 = 800.0;
-pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 4000.0;
+pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 5500.0;
 
 #[rustfmt::skip]
 pub fn body_modes_for_instrument(
