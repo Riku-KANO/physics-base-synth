@@ -608,67 +608,101 @@ impl KarplusStrong {
             return 0.0;
         }
 
-        // Step 4 では Phase 4b 経路を維持するため string 0 のみ駆動。
-        // Step 7 で `for string_idx in 0..self.n_strings_active` 並列ループへ拡張。
-        let buf = &mut self.string_buffers[0];
-        let state = &mut self.string_states[0];
-        let buf_len = buf.len();
-
-        // 定常時は length 再分解と Thiran 係数再計算を skip (差分 < 1e-5)。
-        // Phase 4a D48: LFO Pitch factor を実効 length に乗算 (factor は Engine 側で exp2 済)。
+        // Pitch Bend / LFO は中央弦 (string 0) のみで運用。Phase 4b 同型で 1 sample 毎に
+        // 一度だけ length 再分解 (`length_target` ベース + LFO factor)。strings 1/2
+        // (Piano の左右副弦) は note_on 時の length を保持する。
+        let buf0_len = self.string_buffers[0].len();
         let base_target = self.length_target.next_sample();
         let effective_length = base_target * self.lfo_pitch_factor;
         if (effective_length - self.cached_length).abs() > 1e-5 {
-            let max_len = (buf_len - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
+            let max_len = (buf0_len - FRACTIONAL_DELAY_BUFFER_MARGIN) as f32;
             let clamped = effective_length.clamp(3.0, max_len);
-            state.length_int = clamped as usize;
-            let frac = clamped - state.length_int as f32;
-            state.thiran.set_fractional(frac);
+            let length_int = clamped as usize;
+            let frac = clamped - length_int as f32;
+            let state0 = &mut self.string_states[0];
+            state0.length_int = length_int;
+            state0.thiran.set_fractional(frac);
             self.cached_length = effective_length;
         }
 
-        // Pitch Bend で length_int が動的に変わるため、剰余は `% buf_len` のみ。
-        // `% length_int` だと write/read で異なる剰余系になり buffer の論理長が破綻する。
-        let read_z = (state.write_idx + buf_len - state.length_int) % buf_len;
-
-        // Phase 4b D60: Dispersion cascade を Thiran の前段に挿入。
-        // `dispersion_active = false` 経路は Phase 4a と完全一致 (D67 互換性核心)。
-        let read_value = if self.dispersion_active {
-            let mut x = buf[read_z];
-            for stage in state.dispersion_stages.iter_mut() {
-                x = stage.process(x);
-            }
-            state.thiran.process(x)
-        } else {
-            state.thiran.process(buf[read_z])
-        };
-
-        // Phase 4a D48: brightness LPF に LFO offset を加算してから clamp。
+        // Phase 4a D48: brightness offset + clamp は 1 sample 毎 (= per voice) で 1 回計算。
+        // 弦間で b / d を共有することで Multi-string でも brightness smoother / damping
+        // smoother の進行速度を 1 sample 毎に固定し、Phase 4b の挙動と整合させる。
         let b = (self.brightness.next_sample() + self.lfo_brightness_offset).clamp(0.0, 1.0);
-        let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
-        self.last_filter_out = filtered;
-
-        let loss_out = self.loss_filter.process_sample(filtered);
-
         let d = self.damping.next_sample();
-        let mut damped = d * loss_out;
+        let bus_feedback = self.bus_feedback_pending;
 
-        // denormal flush (D6)
-        damped += 1.0e-25;
-        damped -= 1.0e-25;
+        let n_strings = self.n_strings_active;
+        let mut sum_thiran = 0.0_f32;
+        let mut last_damped = 0.0_f32;
 
-        buf[state.write_idx] = damped;
-        let next_write = state.write_idx + 1;
-        state.write_idx = if next_write == buf_len { 0 } else { next_write };
+        // Phase 4c D70: 弦個別の KS ループ。
+        // 各弦で read → dispersion → Thiran → brightness LPF → loss filter → damping write back
+        // を実行する。brightness LPF (`last_filter_out`) と `loss_filter` は voice 共有状態で、
+        // 弦数 N=1 経路では Phase 4b と byte 一致 (D83 / F61-a)。N>1 経路では弦間で順次更新する
+        // ことで Piano が Phase 4b から意図的に divergent な出力を持つ (F61-b)。
+        for string_idx in 0..n_strings {
+            let buf = &mut self.string_buffers[string_idx];
+            let state = &mut self.string_states[string_idx];
+            let buf_len = buf.len();
+            if state.length_int < 3 || state.length_int >= buf_len {
+                continue;
+            }
 
-        self.energy = self.energy * ENERGY_DECAY + damped * damped * ENERGY_RISE;
+            let read_z = (state.write_idx + buf_len - state.length_int) % buf_len;
+
+            // Phase 4b D60: Dispersion cascade を Thiran の前段に挿入。
+            // `dispersion_active = false` 経路 (Default 等) は cascade を skip して Phase 4a と
+            // 完全一致 (D67 / D83 互換性核心)。
+            let read_value = if self.dispersion_active {
+                let mut x = buf[read_z];
+                for stage in state.dispersion_stages.iter_mut() {
+                    x = stage.process(x);
+                }
+                state.thiran.process(x)
+            } else {
+                state.thiran.process(buf[read_z])
+            };
+
+            // Phase 4b: brightness LPF (1 段 IIR、voice 共有 state)。
+            let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
+            self.last_filter_out = filtered;
+
+            // Phase 3 D38: loss filter (周波数依存 1pole IIR、voice 共有 state)。
+            let loss_out = self.loss_filter.process_sample(filtered);
+
+            // Phase 4c D76: damping + bus feedback。bus_feedback は Engine から
+            // `inject_feedback` 経由で受領した `bus_out_prev × feedback_gain` の値。
+            // feedback_gain=0 (Default kind / Piano Sustain OFF) では 0 加算で Phase 4a / 4b と
+            // byte 一致 (F65-a)。
+            let mut damped = d * loss_out + bus_feedback;
+            // denormal flush (D6)
+            damped += 1.0e-25;
+            damped -= 1.0e-25;
+
+            buf[state.write_idx] = damped;
+            let next_write = state.write_idx + 1;
+            state.write_idx = if next_write == buf_len { 0 } else { next_write };
+
+            sum_thiran += read_value;
+            last_damped = damped;
+        }
+
+        // Sympathetic bus inject 値は 1 sample で消費。次の sample で Engine が再注入する。
+        self.bus_feedback_pending = 0.0;
+
+        // Energy / activity check。`n_strings = 1` 経路では `last_damped` が string 0 の
+        // damped と一致するため Phase 4b の `damped * damped * ENERGY_RISE` と byte 一致継承
+        // (F61-a)。N>1 経路では最後の弦の damped を使う簡素化で voice stealing の oldest 判定
+        // としては十分な精度。
+        self.energy = self.energy * ENERGY_DECAY + last_damped * last_damped * ENERGY_RISE;
         if self.energy < ENERGY_THRESHOLD {
             self.active = false;
         }
 
         self.age_samples = self.age_samples.saturating_add(1);
 
-        read_value
+        sum_thiran
     }
 }
 
