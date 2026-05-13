@@ -292,9 +292,8 @@ export function generateRustSource(paramsJson) {
 		}
 		lines.push('');
 
-		// Phase 4a D52 + Phase 4c R44 緩和策 2: 楽器ごとの BODY_MODES_<INSTRUMENT>_L/R。
-		// 配列長は楽器ごとに 8 (Default 等 7 楽器) または 16 (Piano、Phase 4c で拡張) で、
-		// `body_modes_for_instrument` は slice 戻り値で吸収する。
+		// Phase 4a D52 + Phase 4c R44 緩和策 2: 楽器ごとの BODY_MODES_<INSTRUMENT>_L/R
+		// (Default 等 = 8 modes、Piano = 16 modes)。
 		for (const ins of instruments) {
 			const upper = constName(ins.kind);
 			const modesL = ins.body_modes;
@@ -380,10 +379,7 @@ export function generateRustSource(paramsJson) {
 		// 4 行に展開し、短い arm は 1 行で残すため、単純な generator 出力では行ごとに
 		// 整形差が出る。関数全体に `#[rustfmt::skip]` を付けて生成側の出力をそのまま固定する
 		// (Phase 1-3 の BODY_MODES_L と同パターン)。
-		// Phase 4c R44 緩和策 2 (Step 15): 配列長が楽器ごとに異なる (Default 等 = 8、Piano = 16)
-		// ため、戻り値を slice 化して長さを runtime で持つ形に変更。Phase 4a/4b の呼出側は
-		// `for i in 0..NUM_MODES` ループを `for i in 0..l_modes.len()` 等に書き換えるが、
-		// Default kind の slice は 8 要素のため byte 一致は維持される。
+		// Phase 4c R44 緩和策 2: slice 戻り値で楽器ごとの可変長 (Default 等 = 8、Piano = 16) を吸収。
 		lines.push('#[rustfmt::skip]');
 		lines.push('pub fn body_modes_for_instrument(');
 		lines.push('    kind: InstrumentKind,');

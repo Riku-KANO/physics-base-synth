@@ -631,6 +631,10 @@ impl KarplusStrong {
         self.dispersion_active = false;
     }
 
+    // 各弦のループ内で string_buffers / string_states / loss_out_per_string を同じ
+    // `string_idx` で同時参照するため、index ベース for ループを維持する (clippy の
+    // iter().enumerate() 推奨は単一配列向けで、複数配列の同時 index 参照には不適)。
+    #[allow(clippy::needless_range_loop)]
     #[inline(always)]
     pub fn process_sample(&mut self) -> f32 {
         if !self.active {
@@ -664,17 +668,17 @@ impl KarplusStrong {
         let n_strings = self.n_strings_active;
         let mut sum_thiran = 0.0_f32;
         let mut last_damped = 0.0_f32;
+        let mut sum_all_loss = 0.0_f32;
 
-        // Phase 4c R44 緩和策 3 (Bridge coupling 案 B): write-back 時に弦間 cross-feed を
-        // 加算するため、まず各弦の loss_out を配列に保存してから二巡目で write back する。
-        // N=1 経路は cross-feed sum が 0 のため Phase 4b / Phase 4a byte 一致継承 (D83)。
+        // Phase 4c R44 緩和策 3 (Bridge coupling 案 B): cross-feed のため各弦の loss_out を
+        // 配列に保存してから二巡目で write back。N=1 経路は sum_other = 0 で Phase 4a HEAD
+        // byte 一致継承 (D83 / F61-a)。
         let mut loss_out_per_string = [0.0_f32; MAX_STRINGS_PER_VOICE];
-        let mut active_string_mask = [false; MAX_STRINGS_PER_VOICE];
 
-        // Pass 1: read → dispersion → Thiran → brightness LPF → loss filter を各弦で実行し
-        // loss_out を保存。brightness LPF / loss_filter は voice 共有状態で順次更新。
+        // Pass 1: read → dispersion → Thiran → brightness LPF → loss filter。brightness LPF /
+        // loss_filter は voice 共有 state、Multi-string 経路では弦間で順次更新する。
         for string_idx in 0..n_strings {
-            let buf = &mut self.string_buffers[string_idx];
+            let buf = &self.string_buffers[string_idx];
             let state = &mut self.string_states[string_idx];
             let buf_len = buf.len();
             if state.length_int < 3 || state.length_int >= buf_len {
@@ -682,10 +686,6 @@ impl KarplusStrong {
             }
 
             let read_z = (state.write_idx + buf_len - state.length_int) % buf_len;
-
-            // Phase 4b D60: Dispersion cascade を Thiran の前段に挿入。
-            // `dispersion_active = false` 経路 (Default 等) は cascade を skip して Phase 4a と
-            // 完全一致 (D67 / D83 互換性核心)。
             let read_value = if self.dispersion_active {
                 let mut x = buf[read_z];
                 for stage in state.dispersion_stages.iter_mut() {
@@ -696,38 +696,25 @@ impl KarplusStrong {
                 state.thiran.process(buf[read_z])
             };
 
-            // Phase 4b: brightness LPF (1 段 IIR、voice 共有 state)。
             let filtered = b * read_value + (1.0 - b) * self.last_filter_out;
             self.last_filter_out = filtered;
-
-            // Phase 3 D38: loss filter (周波数依存 1pole IIR、voice 共有 state)。
             let loss_out = self.loss_filter.process_sample(filtered);
 
             loss_out_per_string[string_idx] = loss_out;
-            active_string_mask[string_idx] = true;
             sum_thiran += read_value;
+            sum_all_loss += loss_out;
         }
 
-        // Pass 2: Bridge coupling 適用後の damping + bus feedback で write back。
-        // 保存型 cross-feed: `coupled = own × (1 - g(N-1)) + g × sum_other`
-        //                  = `own + g × (sum_all - N×own)`
-        //                  = `own × (1 - g) + g × (sum_all - own)` (N=2 の場合)
-        // N=1 のとき sum_other = 0、coupled = own × 1 = own で Phase 4b 同型 (byte match)。
-        // N=3 (Piano) のとき in-phase は `own × (1-2g) + 2g × own = own` × ... ではなく
-        // gain 行列の固有値で評価: in-phase eigenvalue = 1 (sum_all 同符号で保存)、
-        // out-of-phase eigenvalues = 1 - Ng (string が逆位相だと early に減衰)。
-        let sum_all_loss: f32 = loss_out_per_string.iter().take(n_strings).sum();
+        // Pass 2: 保存型 Bridge coupling + damping + bus_feedback で write back。
+        // `coupled = own + g × (sum_other - (N-1)·own)` で gain 行列の最大固有値 = 1 を保つ。
+        // N=1 で sum_other = 0 / n_other = 0、coupled = own、byte 一致継承。
+        let n_other = (n_strings.saturating_sub(1)) as f32;
+        let coupling_self = 1.0 - BRIDGE_COUPLING_G * n_other;
         let g = BRIDGE_COUPLING_G;
         for string_idx in 0..n_strings {
-            if !active_string_mask[string_idx] {
-                continue;
-            }
             let own = loss_out_per_string[string_idx];
             let sum_other = sum_all_loss - own;
-            let n_other = (n_strings - 1) as f32;
-            // 保存型: own を g(N-1) 抜いて、抜いた分を sum_other 経由で受け取る。
-            // N=1 で n_other=0 のため coupled = own、byte 一致継承。
-            let coupled = own * (1.0 - g * n_other) + g * sum_other;
+            let coupled = own * coupling_self + g * sum_other;
 
             let mut damped = d * coupled + bus_feedback;
             // denormal flush (D6)
@@ -737,6 +724,9 @@ impl KarplusStrong {
             let buf = &mut self.string_buffers[string_idx];
             let state = &mut self.string_states[string_idx];
             let buf_len = buf.len();
+            if state.length_int < 3 || state.length_int >= buf_len {
+                continue;
+            }
             buf[state.write_idx] = damped;
             let next_write = state.write_idx + 1;
             state.write_idx = if next_write == buf_len { 0 } else { next_write };

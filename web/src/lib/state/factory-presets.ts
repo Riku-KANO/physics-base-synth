@@ -76,10 +76,7 @@ export const FACTORY_PRESETS: PresetV1[] = [
 	},
 	{
 		// Phase 4c D72/D75/D77/D78 + R44 緩和策 1 (Step 18 pass 1): Piano
-		// (Multi-string 1/2/3 + Hertz hammer + Sympathetic + B(note) LUT + Modal Body M=16)。
-		// 「電子ピアノ寄り」から「アコースティック寄り」へ寄せるため Phase 4b の開始点から
-		// bodyWet 0.4→0.55 (Modal Body 共鳴強化、M=16 の追加帯域も活きる) / brightness
-		// 0.55→0.60 (高域 presence) / damping 0.998→0.997 (余韻の自然減衰) を調整。
+		// (Multi-string + Hertz hammer + Sympathetic + B(note) LUT + Modal Body M=16)。
 		version: 1,
 		name: 'Piano',
 		createdAt: '2026-05-14T00:00:00.000Z',
