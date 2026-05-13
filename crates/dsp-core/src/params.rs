@@ -313,7 +313,7 @@ pub const BODY_MODES_SITAR_R: [BodyMode; 8] = [
 ];
 
 #[rustfmt::skip]
-pub const BODY_MODES_PIANO_L: [BodyMode; 8] = [
+pub const BODY_MODES_PIANO_L: [BodyMode; 16] = [
     BodyMode { freq: 55.0, q: 10.0, gain: 1.0 },
     BodyMode { freq: 110.0, q: 12.0, gain: 0.85 },
     BodyMode { freq: 175.0, q: 15.0, gain: 0.7 },
@@ -322,10 +322,18 @@ pub const BODY_MODES_PIANO_L: [BodyMode; 8] = [
     BodyMode { freq: 750.0, q: 28.0, gain: 0.35 },
     BodyMode { freq: 1300.0, q: 35.0, gain: 0.28 },
     BodyMode { freq: 2200.0, q: 40.0, gain: 0.22 },
+    BodyMode { freq: 3200.0, q: 45.0, gain: 0.36 },
+    BodyMode { freq: 4500.0, q: 50.0, gain: 0.28 },
+    BodyMode { freq: 6200.0, q: 55.0, gain: 0.22 },
+    BodyMode { freq: 8500.0, q: 60.0, gain: 0.18 },
+    BodyMode { freq: 11000.0, q: 65.0, gain: 0.14 },
+    BodyMode { freq: 13500.0, q: 70.0, gain: 0.12 },
+    BodyMode { freq: 16000.0, q: 75.0, gain: 0.1 },
+    BodyMode { freq: 19000.0, q: 80.0, gain: 0.08 },
 ];
 
 #[rustfmt::skip]
-pub const BODY_MODES_PIANO_R: [BodyMode; 8] = [
+pub const BODY_MODES_PIANO_R: [BodyMode; 16] = [
     BodyMode { freq: 57.75, q: 9.5, gain: 1.05 },
     BodyMode { freq: 104.5, q: 12.6, gain: 0.8925 },
     BodyMode { freq: 183.75, q: 14.25, gain: 0.735 },
@@ -334,6 +342,14 @@ pub const BODY_MODES_PIANO_R: [BodyMode; 8] = [
     BodyMode { freq: 712.5, q: 29.4, gain: 0.3675 },
     BodyMode { freq: 1365.0, q: 33.25, gain: 0.294 },
     BodyMode { freq: 2090.0, q: 42.0, gain: 0.231 },
+    BodyMode { freq: 3360.0, q: 42.75, gain: 0.378 },
+    BodyMode { freq: 4275.0, q: 52.5, gain: 0.294 },
+    BodyMode { freq: 6510.0, q: 52.25, gain: 0.231 },
+    BodyMode { freq: 8075.0, q: 63.0, gain: 0.189 },
+    BodyMode { freq: 11550.0, q: 61.75, gain: 0.147 },
+    BodyMode { freq: 12825.0, q: 73.5, gain: 0.126 },
+    BodyMode { freq: 16800.0, q: 71.25, gain: 0.105 },
+    BodyMode { freq: 18050.0, q: 84.0, gain: 0.084 },
 ];
 
 // Phase 3 互換: Default kind の alias
@@ -375,12 +391,29 @@ pub const INSTRUMENT_KIND_COUNT: usize = 8;
 
 pub const INHARMONICITY_B_PIANO: f32 = 0.00075;
 pub const HAMMER_CUTOFF_LOW_PIANO: f32 = 800.0;
-pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 4000.0;
+pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = 6500.0;
+pub const UNISON_DETUNE_CENTS_PIANO: f32 = 1.5;
+pub const SYMPATHETIC_AMOUNT_PIANO: f32 = 1.0;
+
+#[rustfmt::skip]
+pub const INHARMONICITY_B_CURVE_PIANO: [f32; 88] = [
+    0.00031, 0.00029, 0.00027, 0.00025, 0.00023, 0.00022, 0.00021, 0.0002,
+    0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002,
+    0.00021, 0.00021, 0.00022, 0.00023, 0.00024, 0.00025, 0.00027, 0.00029,
+    0.00031, 0.00034, 0.00037, 0.00041, 0.00045, 0.0005, 0.00055, 0.00061,
+    0.00067, 0.00075, 0.00083, 0.00092, 0.001, 0.0011, 0.0013, 0.0014,
+    0.0016, 0.0018, 0.002, 0.0023, 0.0026, 0.0029, 0.0032, 0.0036,
+    0.004, 0.0045, 0.005, 0.0056, 0.0063, 0.007, 0.0079, 0.0088,
+    0.0099, 0.011, 0.012, 0.014, 0.016, 0.018, 0.02, 0.022,
+    0.025, 0.028, 0.032, 0.035, 0.04, 0.045, 0.05, 0.056,
+    0.063, 0.071, 0.08, 0.09, 0.1, 0.11, 0.13, 0.14,
+    0.16, 0.18, 0.2, 0.22, 0.25, 0.28, 0.32, 0.36,
+];
 
 #[rustfmt::skip]
 pub fn body_modes_for_instrument(
     kind: InstrumentKind,
-) -> (&'static [BodyMode; 8], &'static [BodyMode; 8]) {
+) -> (&'static [BodyMode], &'static [BodyMode]) {
     match kind {
         InstrumentKind::Default => (&BODY_MODES_DEFAULT_L, &BODY_MODES_DEFAULT_R),
         InstrumentKind::GuitarClassical => (&BODY_MODES_GUITAR_CLASSICAL_L, &BODY_MODES_GUITAR_CLASSICAL_R),

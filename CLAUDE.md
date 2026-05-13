@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/specs/<date>-<seq>-<name>/` | イテレーション単位の仕様書群（pre-research + 01〜07）。実装着手前に通読 |
 | `docs/retrospective/<iteration-name>.md` | 各イテレーション完了時の振り返り。次フェーズへの引き継ぎ事項を含む |
 
-現在のイテレーション: **次は Phase 4c（C8 自己発振 / WASM SIMD / Sustain × sympathetic / Pick fractional 化 等から選定）**。仕様書ディレクトリは `docs/specs/<YYYY-MM-DD>-006-phase4c/` で別計画として策定する。Phase 4b 実装完了後、retrospective を経てから着手。
+現在のイテレーション: **次は Phase 4d（C8 自己発振 / WASM SIMD / Pick fractional 化 / Look-ahead limiter / LFO 波形拡張 / LFO destinations 拡張 / 楽器切替 fade-out / Cross-tab preset / Preset JSON I/O / 複数 Piano 機種 / Hammer Hardness UI / Una corda / Sympathetic を Sitar / Guitar へ等から選定、D84）**。仕様書ディレクトリは `docs/specs/<YYYY-MM-DD>-007-phase4d/` で別計画として策定する。Phase 4c retrospective を経てから着手。
 
 完了済みイテレーション:
 - `docs/specs/2026-05-06-001-mvp/` (Phase 1 / MVP) — 単音 Karplus-Strong、整数ディレイ、A1=55Hz で 2.3% 偏移
@@ -25,6 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/specs/2026-05-07-003-phase3/` (Phase 3) — Modal Body / loss filter / pick position / Thiran allpass (D36 案 D 採用) / Brightness 補正 / soft clip / Pitch Bend / Sustain / VoiceMeter UI
 - `docs/specs/2026-05-08-004-phase4a/` (Phase 4a) — wasm-opt -O3 / `excitation_snapshot` cfg(test) / 多楽器 6 種 (Default + Guitar Classical / Ukulele / Mandolin / Bass / Guitar Steel / Sitar) / グローバル LFO (Sine + Triangle, 0.1〜8 Hz) / Mod Wheel (CC#1) master / LFO destinations Pitch/Brightness/Volume / プリセット保存 (localStorage v1, 最大 32) / Factory Preset 7 種 / 18 C ABI 関数 + memory export = 19 required exports
 - `docs/specs/2026-05-09-005-phase4b/` (Phase 4b) — ピアノ音色 (`InstrumentKind::Piano = 7`) / Stretching all-pass cascade (M=8 段、Rauhala-Välimäki closed-form、`inharmonicity_b = 7.5e-4`) / Hammer model (Commuted impulse + velocity-dependent LPF, 800-4000 Hz) / Piano Modal Body (Conklin 1996, mode1=55Hz, M=8) / Factory Preset 8 種 / `__synthDev.measureProcessTime` (dev-only F38b 計測自動化、`performance.now()` ベース) / `.gitattributes` LF 統一 / D67 互換性 (Default + Mod Wheel=0 で Phase 4a と ε=1e-6 バイト一致機械保証)
+- `docs/specs/2026-05-13-006-phase4c/` (Phase 4c) — Piano 構造拡張: Multi-string per voice (1/2/3 弦、`KarplusStrong` 内 `[StringState; 3]` + `n_strings(midi)` で鍵盤位置依存) / Unison detuning ±1.5 cents (D72) / Hertz law raised cosine hammer (t_c=1.2〜4 ms, f_c=800〜5500 Hz, amplitude=√v、D74/D75) / Global sympathetic resonance bus (`ResonanceBus`: 2 ms delay + 8 kHz 1pole LPF + feedback_gain SmoothedValue、D76) / Piano + Sustain ON で `feedback_gain × FEEDBACK_GAIN_MAX (0.05)` 経由で voice 注入 / 88 鍵 Inharmonicity B(note) LUT (`INHARMONICITY_B_CURVE_PIANO`, D78) / `inharmonicity_b_for_note: fn(u8) -> f32` 経由で楽器ごとに切替 / `n_strings = 1` で Phase 4a HEAD と ε=1e-6 バイト一致継承 (D83) / 新規 ParamId / C ABI 関数追加なし (D81) / WASM gzip 20.0 KB
 
 新イテレーションの振り返りを作る場合は `/retrospective <iteration-name>` カスタムコマンド（`.claude/commands/retrospective.md`）。
 

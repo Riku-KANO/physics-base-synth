@@ -222,7 +222,15 @@ export const BODY_MODES_PIANO_L: readonly BodyMode[] = [
 	{ freq: 460, q: 22, gain: 0.45 },
 	{ freq: 750, q: 28, gain: 0.35 },
 	{ freq: 1300, q: 35, gain: 0.28 },
-	{ freq: 2200, q: 40, gain: 0.22 }
+	{ freq: 2200, q: 40, gain: 0.22 },
+	{ freq: 3200, q: 45, gain: 0.36 },
+	{ freq: 4500, q: 50, gain: 0.28 },
+	{ freq: 6200, q: 55, gain: 0.22 },
+	{ freq: 8500, q: 60, gain: 0.18 },
+	{ freq: 11000, q: 65, gain: 0.14 },
+	{ freq: 13500, q: 70, gain: 0.12 },
+	{ freq: 16000, q: 75, gain: 0.1 },
+	{ freq: 19000, q: 80, gain: 0.08 }
 ] as const;
 
 export const BODY_MODES_PIANO_R: readonly BodyMode[] = [
@@ -233,7 +241,15 @@ export const BODY_MODES_PIANO_R: readonly BodyMode[] = [
 	{ freq: 483, q: 20.9, gain: 0.47250000000000003 },
 	{ freq: 712.5, q: 29.400000000000002, gain: 0.3675 },
 	{ freq: 1365, q: 33.25, gain: 0.29400000000000004 },
-	{ freq: 2090, q: 42, gain: 0.231 }
+	{ freq: 2090, q: 42, gain: 0.231 },
+	{ freq: 3360, q: 42.75, gain: 0.378 },
+	{ freq: 4275, q: 52.5, gain: 0.29400000000000004 },
+	{ freq: 6510, q: 52.25, gain: 0.231 },
+	{ freq: 8075, q: 63, gain: 0.189 },
+	{ freq: 11550, q: 61.75, gain: 0.14700000000000002 },
+	{ freq: 12825, q: 73.5, gain: 0.126 },
+	{ freq: 16800, q: 71.25, gain: 0.10500000000000001 },
+	{ freq: 18050, q: 84, gain: 0.084 }
 ] as const;
 
 // Phase 3 互換: Default kind の alias
@@ -259,4 +275,20 @@ export const INSTRUMENT_KIND_COUNT = 8;
 
 export const INHARMONICITY_B_PIANO = 0.00075;
 export const HAMMER_CUTOFF_LOW_PIANO = 800;
-export const HAMMER_CUTOFF_HIGH_PIANO = 4000;
+export const HAMMER_CUTOFF_HIGH_PIANO = 6500;
+export const UNISON_DETUNE_CENTS_PIANO = 1.5;
+export const SYMPATHETIC_AMOUNT_PIANO = 1;
+
+export const INHARMONICITY_B_CURVE_PIANO: readonly number[] = [
+	0.00031, 0.00029, 0.00027, 0.00025, 0.00023, 0.00022, 0.00021, 0.0002,
+	0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002,
+	0.00021, 0.00021, 0.00022, 0.00023, 0.00024, 0.00025, 0.00027, 0.00029,
+	0.00031, 0.00034, 0.00037, 0.00041, 0.00045, 0.0005, 0.00055, 0.00061,
+	0.00067, 0.00075, 0.00083, 0.00092, 0.001, 0.0011, 0.0013, 0.0014,
+	0.0016, 0.0018, 0.002, 0.0023, 0.0026, 0.0029, 0.0032, 0.0036,
+	0.004, 0.0045, 0.005, 0.0056, 0.0063, 0.007, 0.0079, 0.0088,
+	0.0099, 0.011, 0.012, 0.014, 0.016, 0.018, 0.02, 0.022,
+	0.025, 0.028, 0.032, 0.035, 0.04, 0.045, 0.05, 0.056,
+	0.063, 0.071, 0.08, 0.09, 0.1, 0.11, 0.13, 0.14,
+	0.16, 0.18, 0.2, 0.22, 0.25, 0.28, 0.32, 0.36
+] as const;

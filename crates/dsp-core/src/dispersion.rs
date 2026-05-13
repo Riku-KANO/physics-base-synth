@@ -74,6 +74,25 @@ impl Default for DispersionStage {
     }
 }
 
+/// Phase 4c D78 / D79: MIDI ノートを 21..=108 に clamp してから 88 鍵 B(note) LUT を引く。
+/// 範囲外 (< 21 / > 108) は端値で fallback、Engine から渡される `u8` 全域 (0..=127) に対し
+/// 未定義動作 / panic が発生しないことを保証する。`Engine::inharmonicity_b_for_note` 関数
+/// ポインタ経由で Piano kind の note_on 時に呼ばれる。
+#[inline]
+pub fn b_curve_piano(midi: u8) -> f32 {
+    let clamped = midi.clamp(21, 108);
+    let idx = (clamped - 21) as usize;
+    crate::params::INHARMONICITY_B_CURVE_PIANO[idx]
+}
+
+/// Phase 4c D77 / D78: 非 Piano 楽器用の B 関数ポインタ。常に 0 を返すことで
+/// `compute_dispersion_a1` の `b.max(1e-6)` 分岐を通り a1 が極小 (= dispersion 実質 disable)
+/// になる。Phase 4a / 4b の `dispersion_active = false` 経路と二重保証で互換性を維持する。
+#[inline]
+pub fn b_curve_zero(_midi: u8) -> f32 {
+    0.0
+}
+
 /// Phase 4b D59: Rauhala-Välimäki 2006 closed-form で a1 + 群遅延を算出。
 ///
 /// # 引数
@@ -123,4 +142,31 @@ pub fn compute_dispersion_a1(m: u32, b: f32, f0: f32, fs: f32) -> (f32, f32) {
     let group_delay_per_stage = polydel(a1) - polydel(1.0 / a1);
 
     (a1, group_delay_per_stage)
+}
+
+#[cfg(test)]
+mod b_curve_tests {
+    use super::*;
+    use crate::params::INHARMONICITY_B_CURVE_PIANO;
+
+    /// F67-a (provisional pass at Step 3, full F67-a 再掲 in Step 13).
+    #[test]
+    fn test_b_curve_length_88() {
+        assert_eq!(INHARMONICITY_B_CURVE_PIANO.len(), 88);
+    }
+
+    /// F67-f (provisional pass at Step 3). MIDI 0 and 127 must map to LUT
+    /// endpoints rather than panic / OOB, so Engine can hand any `u8`.
+    #[test]
+    fn test_b_curve_clamps_out_of_range() {
+        assert!((b_curve_piano(0) - INHARMONICITY_B_CURVE_PIANO[0]).abs() < 1e-9);
+        assert!((b_curve_piano(127) - INHARMONICITY_B_CURVE_PIANO[87]).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_b_curve_zero_returns_zero() {
+        for midi in 0u8..=127 {
+            assert_eq!(b_curve_zero(midi), 0.0);
+        }
+    }
 }
