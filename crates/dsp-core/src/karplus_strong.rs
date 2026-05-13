@@ -19,6 +19,42 @@ pub(crate) const FRACTIONAL_DELAY_BUFFER_MARGIN: usize = 1;
 /// Phase 4c D70 / D71: 1 voice あたりの最大弦数 (Piano は 1/2/3、他は 1)。
 pub const MAX_STRINGS_PER_VOICE: usize = 3;
 
+/// Phase 4c D69: MIDI ノート番号から弦数を決定する (鍵盤位置依存)。
+/// - A0..=A1 (21..=33): 1 弦 (低音域、太い銅線 1 本構成のため unison なし)
+/// - A#1..=B2 (34..=47): 2 弦 (中低域)
+/// - C3..=C8 (48..=108): 3 弦 (中高域、tri-string unison)
+///
+/// 範囲外 (`midi < 21` or `midi > 108`) は端側で fallback する (低音域 → 1 弦、
+/// 高音域 → 3 弦)。`Engine::note_on` は `u8` で受け取るため未定義動作を発生させない。
+#[inline]
+pub fn n_strings(midi: u8) -> usize {
+    match midi {
+        ..=33 => 1,
+        34..=47 => 2,
+        _ => 3,
+    }
+}
+
+/// Phase 4c D72: 弦インデックスから unison detune 量 (cents) を返す。
+/// - 3 弦: [0.0, -base, +base]  (中央 + 左右ペア)
+/// - 2 弦: [0.0, +base]          (中央 + 片側)
+/// - 1 弦: [0.0]
+///
+/// `base` は Piano プリセットの `unison_detune_cents` (典型 1.5、D72)。
+/// 中央弦は常に detune = 0 として「Phase 4b 同等の center pitch」を維持。
+#[inline]
+pub fn string_detune_cents(string_idx: usize, n_strings_total: usize, base_cents: f32) -> f32 {
+    match (n_strings_total, string_idx) {
+        (1, 0) => 0.0,
+        (2, 0) => 0.0,
+        (2, 1) => base_cents,
+        (3, 0) => 0.0,
+        (3, 1) => -base_cents,
+        (3, 2) => base_cents,
+        _ => 0.0,
+    }
+}
+
 /// Phase 4c D70: 1 voice 内の各弦の独立状態。`KarplusStrong::string_states: [StringState; 3]`
 /// で inline 保持する。Phase 4b までは voice 単位で持っていた `write_index` / `length_int` /
 /// `thiran` / `dispersion_stages` を弦別管理に分解した形 (中央弦 = string_states[0])。
@@ -292,96 +328,141 @@ impl KarplusStrong {
 
     /// `note_id` を `Option<u8>` で受けるのは `Some(0)` と `None` の取り違えを設計レベルで排除するため。
     ///
-    /// Step 4 時点では Phase 4b 同等経路 (string 0 のみ駆動、`n_strings_active = 1` 固定)。
-    /// Step 5 で `n_strings(midi)` 連動 + 各弦 detune ループへ拡張。
+    /// Phase 4c Step 5: `dispersion_active && note_id.is_some()` のとき `n_strings(midi)` で
+    /// 1/2/3 弦に分岐 (D69)。各弦に `string_detune_cents` を適用し、弦個別の
+    /// `f_0_string = f_0_base × 2^(detune/1200)` と dispersion 係数を算出する (D72)。
+    /// それ以外の経路 (非 Piano / Voice trait `note_on` の note_id=None) では
+    /// `n_strings_active = 1` 固定で Phase 4a / 4b と byte 一致 (D83 / F61-a)。
+    ///
+    /// `state.write_idx` は Phase 4b 同型 `= len_int` を維持する (仕様書 §1.4 のサンプルは
+    /// `write_idx = 0` と書いているが、励振 buffer は `buf[0..len_int]` に配置されており、
+    /// `read_z = (write_idx + buf_len - length_int) % buf_len = 0` で第 1 sample を読むには
+    /// `write_idx = len_int` が必須。`write_idx = 0` だと初回 read が `buf_len - length_int`
+    /// になり、励振を踏まない経路となって Phase 4a HEAD byte 一致が破綻する)。
     fn note_on_internal(&mut self, note_id: Option<u8>, freq_hz: f32, velocity: f32) {
-        // Phase 4c Step 4: Phase 4b 互換維持のため n_strings_active = 1 固定 (Step 5 で連動化)。
-        self.n_strings_active = 1;
+        let f_0_base = freq_hz.max(1.0);
 
-        let raw_len = self.sample_rate / freq_hz.max(1.0);
-        let buf_capacity = self.string_buffers[0].len();
-        let max_len_usize = buf_capacity.saturating_sub(FRACTIONAL_DELAY_BUFFER_MARGIN);
+        // Phase 4c D69 / D70: 弦数を MIDI ノートから決定。Voice trait 経由 (note_id=None) や
+        // 非 Piano (`dispersion_active=false`) は常に 1 弦 (D83 互換性継承)。
+        let n_strings_total = match (self.dispersion_active, note_id) {
+            (true, Some(midi)) => n_strings(midi),
+            _ => 1,
+        };
+        self.n_strings_active = n_strings_total;
+
         // Brightness LPF (1 段 IIR) の τ_g(b) = (1-b)/b 群遅延がピッチを下方偏移させる
         // ため、note_on 時に raw_length から差し引いて補正する (b=0.5 で 1 sample、b=1.0 で 0)。
+        // 弦個別 detune は ±1.5 cents 程度で raw_len の差は 0.1% 未満、brightness_tau_g の
+        // clamp 上限差は実質的に影響しないため voice 共通で 1 回だけ計算する。
+        let raw_len_base = self.sample_rate / f_0_base;
         let brightness = self.brightness.target();
         let brightness_tau_g = if brightness > 0.001 {
-            ((1.0 - brightness) / brightness).clamp(0.0, raw_len - 3.0)
+            ((1.0 - brightness) / brightness).clamp(0.0, raw_len_base - 3.0)
         } else {
             0.0
         };
 
-        // Phase 4b D60: Dispersion cascade の群遅延補正。Piano kind では各段の a1 を
-        // 算出 + 状態クリアし、M·polydel(a1) を adjusted_length から差し引く。
-        // 非 Piano (`dispersion_active = false`) では 0 加算で Phase 4a と完全互換。
-        let dispersion_tau_g = if self.dispersion_active {
-            let (a1, gd_per_stage) = compute_dispersion_a1(
-                DISPERSION_STAGES as u32,
-                INHARMONICITY_B_PIANO,
-                freq_hz,
-                self.sample_rate,
-            );
-            for stage in self.string_states[0].dispersion_stages.iter_mut() {
-                stage.a1 = a1;
-                stage.z1_in = 0.0;
-                stage.z1_out = 0.0;
+        let max_len_usize = self.string_buffers[0]
+            .len()
+            .saturating_sub(FRACTIONAL_DELAY_BUFFER_MARGIN);
+
+        // 中央弦 (string_idx = 0) の adjusted_length を `base_length` / `length_target` に採用
+        // して Pitch Bend / LFO Pitch を駆動する (Phase 3 / 4a 既存仕様継承)。
+        let mut center_adjusted = raw_len_base.max(3.0);
+
+        for string_idx in 0..n_strings_total {
+            let detune_cents =
+                string_detune_cents(string_idx, n_strings_total, self.unison_detune_cents);
+            let f_0_string = if detune_cents.abs() < 1e-9 {
+                f_0_base
+            } else {
+                f_0_base * 2.0_f32.powf(detune_cents / 1200.0)
+            };
+            let raw_len_string = self.sample_rate / f_0_string;
+
+            // Phase 4b D60 + Phase 4c D78: 弦個別の dispersion a1 算出。
+            // `self.inharmonicity_b` は `set_instrument_params` 経由で Engine から受領した
+            // B(note) LUT 値。Step 4 時点ではデフォルト `INHARMONICITY_B_PIANO` (7.5e-4) と
+            // 一致するため、`note_id = None` 経路は Phase 4b と byte 一致継承。
+            let dispersion_tau_g = if self.dispersion_active {
+                let (a1, gd_per_stage) = compute_dispersion_a1(
+                    DISPERSION_STAGES as u32,
+                    self.inharmonicity_b,
+                    f_0_string,
+                    self.sample_rate,
+                );
+                for stage in self.string_states[string_idx].dispersion_stages.iter_mut() {
+                    stage.a1 = a1;
+                    stage.z1_in = 0.0;
+                    stage.z1_out = 0.0;
+                }
+                (DISPERSION_STAGES as f32) * gd_per_stage
+            } else {
+                // dispersion_active=false の弦は a1=0 で passthrough 動作にしておく。
+                for stage in self.string_states[string_idx].dispersion_stages.iter_mut() {
+                    stage.a1 = 0.0;
+                    stage.z1_in = 0.0;
+                    stage.z1_out = 0.0;
+                }
+                0.0
+            };
+
+            let total_compensation = brightness_tau_g + dispersion_tau_g;
+            let adjusted = (raw_len_string - total_compensation).max(3.0);
+            let len_int = (adjusted.floor() as usize).clamp(3, max_len_usize);
+            let len_frac = (adjusted - len_int as f32).clamp(0.0, 1.0);
+
+            if string_idx == 0 {
+                center_adjusted = adjusted;
             }
-            (DISPERSION_STAGES as f32) * gd_per_stage
-        } else {
-            0.0
-        };
 
-        let total_compensation = brightness_tau_g + dispersion_tau_g;
-        let adjusted = (raw_len - total_compensation).max(3.0);
-        let len_int = (adjusted.floor() as usize).clamp(3, max_len_usize);
-        let len_frac = (adjusted - len_int as f32).clamp(0.0, 1.0);
+            {
+                let state = &mut self.string_states[string_idx];
+                state.length_int = len_int;
+                state.thiran.set_fractional(len_frac);
+                // Thiran は IIR、note_on 連打で前 note の状態を引き継ぐと過渡応答が暴れる。
+                state.thiran.reset();
+                state.write_idx = len_int;
+            }
 
-        {
-            let state = &mut self.string_states[0];
-            state.length_int = len_int;
-            state.thiran.set_fractional(len_frac);
-            // Thiran は IIR、note_on 連打で前 note の状態を引き継ぐと過渡応答が暴れる。
-            state.thiran.reset();
-            state.write_idx = len_int;
-        }
-        self.loss_filter.set_for_frequency(freq_hz);
-
-        // Phase 4b D61: buffer 初期化を pluck (Phase 1〜4a 既存) / hammer (Piano kind) で分岐。
-        // 共通の buffer ゼロクリアは分岐前で実施。Step 4 では string 0 のみ駆動。
-        let buf = &mut self.string_buffers[0];
-        for v in buf.iter_mut() {
-            *v = 0.0;
-        }
-        if self.dispersion_active {
-            // === Hammer 経路 (Commuted impulse + velocity-dependent 1pole IIR LPF) ===
-            // 単位 impulse + velocity 依存 1pole IIR LPF: cutoff = lerp(LOW, HIGH, velocity)、
-            // α = 1 - exp(-2π·fc/fs) を算出して `y[n] = α·x[n] + (1-α)·y[n-1]`。
-            // Pick position は適用しない (hammer は固定位置、ピアノ物理として整合)。
-            buf[0] = velocity;
-            let cutoff_hz = HAMMER_CUTOFF_LOW_PIANO
-                + velocity.clamp(0.0, 1.0) * (HAMMER_CUTOFF_HIGH_PIANO - HAMMER_CUTOFF_LOW_PIANO);
-            let alpha = (1.0 - (-2.0 * core::f32::consts::PI * cutoff_hz / self.sample_rate).exp())
+            // Phase 4b D61: buffer 初期化を pluck (Phase 1〜4a 既存) / hammer (Piano kind) で分岐。
+            // Phase 4c Step 5 時点では Phase 4b の Commuted impulse + velocity LPF を全弦に
+            // 適用する (Step 6 で Hertz raised cosine impulse に差し替え)。
+            let buf = &mut self.string_buffers[string_idx];
+            for v in buf.iter_mut() {
+                *v = 0.0;
+            }
+            if self.dispersion_active {
+                // === Hammer 経路 (Step 6 で Hertz raised cosine に差し替え予定) ===
+                buf[0] = velocity;
+                let cutoff_hz = self.hammer_cutoff_low_hz
+                    + velocity.clamp(0.0, 1.0)
+                        * (self.hammer_cutoff_high_hz - self.hammer_cutoff_low_hz);
+                let alpha = (1.0
+                    - (-2.0 * core::f32::consts::PI * cutoff_hz / self.sample_rate).exp())
                 .clamp(0.001, 0.999);
-            let mut z = 0.0_f32;
-            for sample in buf.iter_mut().take(len_int) {
-                z = alpha * (*sample) + (1.0 - alpha) * z;
-                *sample = z;
-            }
-        } else {
-            // === Pluck 経路 (Phase 1〜4a 既存、Default + 6 楽器) ===
-            // noise burst を `buffer[i] -= buffer[i - K]` で in-place comb 整形。
-            // K = round(β · length_int)、length_int-1 へ clamp。
-            for sample in buf.iter_mut().take(len_int) {
-                *sample = self.rng.next_unit_bipolar() * velocity;
-            }
-            let k = (self.pick_position * len_int as f32)
-                .round()
-                .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
-            if k > 0 {
-                for i in (k..len_int).rev() {
-                    buf[i] -= buf[i - k];
+                let mut z = 0.0_f32;
+                for sample in buf.iter_mut().take(len_int) {
+                    z = alpha * (*sample) + (1.0 - alpha) * z;
+                    *sample = z;
+                }
+            } else {
+                // === Pluck 経路 (Phase 1〜4a 既存、Default + 6 楽器、n_strings_total=1 のみ通る) ===
+                for sample in buf.iter_mut().take(len_int) {
+                    *sample = self.rng.next_unit_bipolar() * velocity;
+                }
+                let k = (self.pick_position * len_int as f32)
+                    .round()
+                    .clamp(0.0, len_int.saturating_sub(1) as f32) as usize;
+                if k > 0 {
+                    for i in (k..len_int).rev() {
+                        buf[i] -= buf[i - k];
+                    }
                 }
             }
         }
+
+        self.loss_filter.set_for_frequency(f_0_base);
 
         self.last_filter_out = 0.0;
         self.energy = velocity * velocity;
@@ -390,10 +471,10 @@ impl KarplusStrong {
         self.current_note = note_id;
         self.bus_feedback_pending = 0.0;
 
-        self.base_length = adjusted;
+        self.base_length = center_adjusted;
         self.pitch_bend_semitones = 0.0;
-        self.length_target.set_immediate(adjusted);
-        self.cached_length = adjusted;
+        self.length_target.set_immediate(center_adjusted);
+        self.cached_length = center_adjusted;
     }
 
     /// length_target = base_length × 2^(-semitones/12) を 5 ms tau で滑らかに追従 (D39)。
