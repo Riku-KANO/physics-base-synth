@@ -1,9 +1,11 @@
+use crate::dispersion::{b_curve_piano, b_curve_zero};
 use crate::hold_stack::HoldStack;
 use crate::lfo::{Lfo, LfoDestination, LfoWaveform};
 use crate::modal_body::ModalBodyResonator;
 use crate::params::{
-    stereo_spread_for_instrument, InstrumentKind, ParamId, BODY_WET_DEFAULT, OUTPUT_GAIN_DEFAULT,
-    PICK_POSITION_DEFAULT, STEREO_SPREAD_DEFAULT,
+    stereo_spread_for_instrument, InstrumentKind, ParamId, BODY_WET_DEFAULT,
+    HAMMER_CUTOFF_HIGH_PIANO, HAMMER_CUTOFF_LOW_PIANO, OUTPUT_GAIN_DEFAULT, PICK_POSITION_DEFAULT,
+    STEREO_SPREAD_DEFAULT, SYMPATHETIC_AMOUNT_PIANO, UNISON_DETUNE_CENTS_PIANO,
 };
 use crate::smoothing::SmoothedValue;
 use crate::soft_clip::soft_clip;
@@ -88,6 +90,24 @@ pub struct Engine {
     current_instrument: InstrumentKind,
     /// Phase 4a D54: 楽器ごとの stereo_spread を反映する保持値。`Engine::stereo_spread()` の参照値。
     stereo_spread: f32,
+
+    /// Phase 4c D72: 楽器プリセットの unison detune (cents)。Piano kind で 1.5、他で 0。
+    /// `trigger_voice` で `pool.note_on_with_piano_params` に渡す。
+    unison_detune_cents: f32,
+    /// Phase 4c D77: Piano + Sustain ON での sympathetic resonance 強度 ∈ [0, 1]。
+    /// Step 10 で ResonanceBus の feedback_gain target = `sympathetic_amount × FEEDBACK_GAIN_MAX`。
+    sympathetic_amount: f32,
+    /// Phase 4c D78: 楽器ごとの B(note) lookup 関数ポインタ。
+    /// Piano kind = `b_curve_piano`、他 = `b_curve_zero`。`trigger_voice` で MIDI を渡して
+    /// `inharmonicity_b` を取得し、`note_on_with_piano_params` に渡す。
+    inharmonicity_b_for_note: fn(u8) -> f32,
+    /// Phase 4c D75: Hertz hammer cutoff の上下限 (Piano プリセット由来)。非 Piano では 0。
+    hammer_cutoff_low_hz: f32,
+    hammer_cutoff_high_hz: f32,
+    /// Phase 4c D76: 前 sample の bus_out。Step 10 の `process` 内で
+    /// `pool.process_sample_with_feedback(bus_out_prev, feedback_gain)` 経由で各 voice に注入。
+    /// Step 8 ではフィールドだけ追加、Step 10 で使用開始。
+    bus_out_prev: f32,
 }
 
 impl Engine {
@@ -113,15 +133,36 @@ impl Engine {
             lfo_volume_depth: SmoothedValue::new(LFO_DEPTH_DEFAULT),
             current_instrument: InstrumentKind::Default,
             stereo_spread: STEREO_SPREAD_DEFAULT,
+            // Phase 4c D72 / D75 / D77 / D78: Default kind の初期状態。Piano パラメータは
+            // `apply_instrument(Piano)` で上書きされ、Default 以外への切替でも明示的に再設定する。
+            unison_detune_cents: 0.0,
+            sympathetic_amount: 0.0,
+            inharmonicity_b_for_note: b_curve_zero,
+            hammer_cutoff_low_hz: 0.0,
+            hammer_cutoff_high_hz: 0.0,
+            bus_out_prev: 0.0,
         }
     }
 
     /// 新規ノートを発音し、割当先ボイスのみ damping をユーザー値に復元する。
     /// `set_damping_voice` を fan-out にすると release 中ボイスを 0.95 → current_damping に
     /// 巻き戻して再生を「復活」させてしまうため、必ず assigned index にだけ適用する。
+    ///
+    /// Phase 4c Step 8: `pool.note_on` を `pool.note_on_with_piano_params` に差し替え、
+    /// B(note) LUT 値 + 楽器固有 params を 1 voice に渡す経路へ移行。`Mono` mode の
+    /// `note_off` 経路 (新 top の `trigger_voice(top, MONO_REVIVE_VELOCITY)`) も同じ差替を受ける。
     fn trigger_voice(&mut self, midi_note: u8, velocity: f32) {
+        let inharmonicity_b = (self.inharmonicity_b_for_note)(midi_note);
         let freq = midi_to_freq(midi_note);
-        let assigned = self.pool.note_on(midi_note, freq, velocity);
+        let assigned = self.pool.note_on_with_piano_params(
+            midi_note,
+            freq,
+            velocity,
+            self.unison_detune_cents,
+            inharmonicity_b,
+            self.hammer_cutoff_low_hz,
+            self.hammer_cutoff_high_hz,
+        );
         self.pool.set_damping_voice(assigned, self.current_damping);
     }
 
@@ -296,6 +337,36 @@ impl Engine {
         self.sustain_state.pending_release_bitmap()
     }
 
+    /// Phase 4c test-only (§7.5): 指定 MIDI note を発音中の voice の `n_strings_active` を観測。
+    /// F68-a / F68-b で「Piano + C4 → 3 弦、Default + C4 → 1 弦」を確認するための accessor。
+    #[doc(hidden)]
+    pub fn voice_n_strings_active_for_test(&self, midi: u8) -> Option<usize> {
+        let i = self.pool.voice_index_for_note(midi)?;
+        self.pool.voice_n_strings_active_for_test(i)
+    }
+
+    /// Phase 4c test-only: 指定 MIDI note を発音中の voice の `inharmonicity_b` を観測。
+    /// F67-g / F68-a で `b_curve_piano(midi)` と一致することを確認。
+    #[doc(hidden)]
+    pub fn voice_inharmonicity_b_for_test(&self, midi: u8) -> Option<f32> {
+        let i = self.pool.voice_index_for_note(midi)?;
+        self.pool.voice_inharmonicity_b_for_test(i)
+    }
+
+    /// Phase 4c test-only: 指定 MIDI note を発音中の voice の `unison_detune_cents` を観測。
+    #[doc(hidden)]
+    pub fn voice_unison_detune_cents_for_test(&self, midi: u8) -> Option<f32> {
+        let i = self.pool.voice_index_for_note(midi)?;
+        self.pool.voice_unison_detune_cents_for_test(i)
+    }
+
+    /// Phase 4c test-only: 指定 MIDI note を発音中の voice の `dispersion_active` を観測。
+    #[doc(hidden)]
+    pub fn voice_dispersion_active_for_test(&self, midi: u8) -> Option<bool> {
+        let i = self.pool.voice_index_for_note(midi)?;
+        self.pool.voice_dispersion_active_for_test(i)
+    }
+
     /// Phase 3 D41: Voice State 共有メモリへのポインタ。
     /// 33 bytes (active mask 1 byte + 8 振幅 × 4 bytes、little-endian)。
     /// `Engine::process` 終端で書き込まれる、JS 側からは `Uint8Array` view で読む。
@@ -321,8 +392,38 @@ impl Engine {
 
         // Phase 4b D67: dispersion_active を全 voice に fan-out。Piano kind では
         // process_sample で 8 段 cascade を経由、他 7 楽器 (Default 含む) では skip。
-        let dispersion_active = matches!(kind, InstrumentKind::Piano);
-        self.pool.set_dispersion_active(dispersion_active);
+        let is_piano = matches!(kind, InstrumentKind::Piano);
+        self.pool.set_dispersion_active(is_piano);
+
+        // Phase 4c D72 / D75 / D77 / D78: 楽器プリセットの Piano パラメータを切替。
+        // 非 Piano では unison_detune / sympathetic / cutoff を 0 にし、B(note) は b_curve_zero
+        // を返す関数ポインタを設定 (dispersion_active=false 経路と二重保証で互換性維持)。
+        let (detune, sympathetic, b_curve, cutoff_low, cutoff_high) = if is_piano {
+            (
+                UNISON_DETUNE_CENTS_PIANO,
+                SYMPATHETIC_AMOUNT_PIANO,
+                b_curve_piano as fn(u8) -> f32,
+                HAMMER_CUTOFF_LOW_PIANO,
+                HAMMER_CUTOFF_HIGH_PIANO,
+            )
+        } else {
+            (0.0, 0.0, b_curve_zero as fn(u8) -> f32, 0.0, 0.0)
+        };
+        self.unison_detune_cents = detune;
+        self.sympathetic_amount = sympathetic;
+        self.inharmonicity_b_for_note = b_curve;
+        self.hammer_cutoff_low_hz = cutoff_low;
+        self.hammer_cutoff_high_hz = cutoff_high;
+
+        // 全 voice に楽器パラメータを fan-out。`inharmonicity_b` は note 依存のため
+        // プレースホルダ 0 で OK (note_on 直前に `note_on_with_piano_params` が割当 voice
+        // にだけ正しい LUT 値を上書きする)。
+        self.pool
+            .set_piano_params(detune, 0.0, cutoff_low, cutoff_high);
+
+        // Phase 4c: bus_out_prev を切替時にクリア。ResonanceBus 本体は Step 10 で追加されるが、
+        // Engine フィールドの bus_out_prev は Step 8 でフィールド導入済のため整合性のために初期化。
+        self.bus_out_prev = 0.0;
     }
 
     /// Phase 4a D46: LFO レート設定 (0.1〜8.0 Hz、SmoothedValue tau=0.05s で平滑化)。
@@ -516,6 +617,15 @@ impl AudioProcessor for Engine {
             .set_instrument(InstrumentKind::Default, self.sample_rate);
         // Phase 4b D67: Default kind に戻るため dispersion_active も false に
         self.pool.set_dispersion_active(false);
+
+        // Phase 4c D72 / D75 / D77 / D78: Piano パラメータも Default 状態へ初期化。
+        self.unison_detune_cents = 0.0;
+        self.sympathetic_amount = 0.0;
+        self.inharmonicity_b_for_note = b_curve_zero;
+        self.hammer_cutoff_low_hz = 0.0;
+        self.hammer_cutoff_high_hz = 0.0;
+        self.pool.set_piano_params(0.0, 0.0, 0.0, 0.0);
+        self.bus_out_prev = 0.0;
     }
 }
 

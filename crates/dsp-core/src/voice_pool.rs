@@ -45,17 +45,53 @@ impl<const N: usize> VoicePool<N> {
     /// 2. 空きボイス検索: 非アクティブのうち最若番に割当
     /// 3. voice stealing: select_voice_for_steal で energy 閾値以下のうち最古
     pub fn note_on(&mut self, midi_note: u8, freq_hz: f32, velocity: f32) -> usize {
+        let i = self.allocate_voice(midi_note);
+        self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
+        i
+    }
+
+    /// Phase 4c D70 / D78: Engine が B(note) LUT 値 + 楽器パラメータを保持して
+    /// `set_instrument_params` 直後に `note_on_with_id` を呼ぶ経路。`Engine::trigger_voice`
+    /// から呼び出される (D81 で C ABI を増やさないため、VoicePool 内に閉じた拡張)。
+    ///
+    /// Phase 4c の 4 楽器パラメータをそのまま受け取る関係で引数が 8 個になる。新しい
+    /// struct を切り出すと Engine 側のコール経路まで波及するため、ここでは spec 通りの
+    /// シグネチャを維持して clippy::too_many_arguments のみローカル抑止する。
+    #[allow(clippy::too_many_arguments)]
+    pub fn note_on_with_piano_params(
+        &mut self,
+        midi_note: u8,
+        freq_hz: f32,
+        velocity: f32,
+        unison_detune_cents: f32,
+        inharmonicity_b: f32,
+        hammer_cutoff_low_hz: f32,
+        hammer_cutoff_high_hz: f32,
+    ) -> usize {
+        let i = self.allocate_voice(midi_note);
+        // 割当先 voice にだけ Piano パラメータ + B(note) を渡す (他 voice は
+        // `apply_instrument` 時の値が `set_piano_params` で fan-out 済)。
+        self.voices[i].set_instrument_params(
+            unison_detune_cents,
+            inharmonicity_b,
+            hammer_cutoff_low_hz,
+            hammer_cutoff_high_hz,
+        );
+        self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
+        i
+    }
+
+    /// 既存 `note_on` の 3 段フォールバック (same-note replace / free voice / steal) を
+    /// 共通化する private helper。Phase 4c で `note_on_with_piano_params` から再利用する。
+    fn allocate_voice(&mut self, midi_note: u8) -> usize {
         if let Some(i) = self.find_voice_index(midi_note) {
-            self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
             return i;
         }
         if let Some(i) = self.voices.iter().position(|v| !v.is_active()) {
-            self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
             return i;
         }
         let i = select_voice_for_steal(&self.voices);
         debug_assert!(i < N);
-        self.voices[i].note_on_with_id(midi_note, freq_hz, velocity);
         i
     }
 
@@ -140,6 +176,28 @@ impl<const N: usize> VoicePool<N> {
         }
     }
 
+    /// Phase 4c D72 / D75 / D78: 楽器プリセットの per-voice パラメータを全 voice に fan-out。
+    /// `Engine::apply_instrument` から呼ばれ、各 voice の `set_instrument_params` を
+    /// `note_on` 前段で更新しておくことで、`note_on_with_piano_params` での 1 voice 上書きと
+    /// 整合する。`inharmonicity_b` は note 依存 (B(note) LUT) のため fan-out では 0 を渡し、
+    /// `note_on_with_piano_params` 内で割当 voice にだけ正しい LUT 値を再設定する。
+    pub fn set_piano_params(
+        &mut self,
+        unison_detune_cents: f32,
+        inharmonicity_b: f32,
+        hammer_cutoff_low_hz: f32,
+        hammer_cutoff_high_hz: f32,
+    ) {
+        for v in self.voices.iter_mut() {
+            v.set_instrument_params(
+                unison_detune_cents,
+                inharmonicity_b,
+                hammer_cutoff_low_hz,
+                hammer_cutoff_high_hz,
+            );
+        }
+    }
+
     pub fn reset(&mut self) {
         for v in self.voices.iter_mut() {
             v.reset();
@@ -174,6 +232,30 @@ impl<const N: usize> VoicePool<N> {
     #[doc(hidden)]
     pub fn voice_length_int(&self, index: usize) -> Option<usize> {
         self.voices.get(index).map(|v| v.length_int())
+    }
+
+    /// Phase 4c test-only: 割当 voice の弦数を観測する (F60-a..d / F68-a / F68-b)。
+    #[doc(hidden)]
+    pub fn voice_n_strings_active_for_test(&self, index: usize) -> Option<usize> {
+        self.voices.get(index).map(|v| v.n_strings_active())
+    }
+
+    /// Phase 4c test-only: 割当 voice の inharmonicity_b を観測する (F67-g / F68-a / F68-b)。
+    #[doc(hidden)]
+    pub fn voice_inharmonicity_b_for_test(&self, index: usize) -> Option<f32> {
+        self.voices.get(index).map(|v| v.inharmonicity_b())
+    }
+
+    /// Phase 4c test-only: 割当 voice の unison_detune_cents を観測する (F68-a / F68-b)。
+    #[doc(hidden)]
+    pub fn voice_unison_detune_cents_for_test(&self, index: usize) -> Option<f32> {
+        self.voices.get(index).map(|v| v.unison_detune_cents())
+    }
+
+    /// Phase 4c test-only: 割当 voice の dispersion_active を観測する (F68-a / F68-b)。
+    #[doc(hidden)]
+    pub fn voice_dispersion_active_for_test(&self, index: usize) -> Option<bool> {
+        self.voices.get(index).map(|v| v.dispersion_active())
     }
 }
 
