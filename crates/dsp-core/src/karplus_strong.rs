@@ -425,21 +425,41 @@ impl KarplusStrong {
                 state.write_idx = len_int;
             }
 
-            // Phase 4b D61: buffer 初期化を pluck (Phase 1〜4a 既存) / hammer (Piano kind) で分岐。
-            // Phase 4c Step 5 時点では Phase 4b の Commuted impulse + velocity LPF を全弦に
-            // 適用する (Step 6 で Hertz raised cosine impulse に差し替え)。
+            // Phase 4c Step 6: 励振 buffer の初期化を分岐。
+            // - Piano kind (`dispersion_active=true`): Hertz law raised cosine + velocity LPF (D74 / D75)
+            // - 非 Piano (`dispersion_active=false`): Phase 1〜4a の pluck (noise burst + pick comb)、
+            //   `n_strings_total = 1` 経路のみ通るため Phase 4b と byte 一致継承 (D83 / F61-c)。
             let buf = &mut self.string_buffers[string_idx];
             for v in buf.iter_mut() {
                 *v = 0.0;
             }
             if self.dispersion_active {
-                // === Hammer 経路 (Step 6 で Hertz raised cosine に差し替え予定) ===
-                buf[0] = velocity;
-                let cutoff_hz = self.hammer_cutoff_low_hz
-                    + velocity.clamp(0.0, 1.0)
-                        * (self.hammer_cutoff_high_hz - self.hammer_cutoff_low_hz);
+                // === Hertz law raised cosine hammer (D74 / D75) ===
+                // 1) パラメータ:
+                //    - t_c_ms = 4.0 - 2.8·v          (1.2 .. 4.0 ms)
+                //    - f_c_hz = LOW + v · (HIGH - LOW)
+                //    - amplitude = √v               (perceptual loudness 補正)
+                let v_clamped = velocity.clamp(0.0, 1.0);
+                let t_c_ms = 4.0 - 2.8 * v_clamped;
+                let t_c_samples = ((t_c_ms * 0.001 * self.sample_rate) as usize)
+                    .min(len_int)
+                    .max(1);
+                let f_c_hz = self.hammer_cutoff_low_hz
+                    + v_clamped * (self.hammer_cutoff_high_hz - self.hammer_cutoff_low_hz);
+                let amplitude = v_clamped.sqrt();
+
+                // 2) raised cosine 半周期 (sin² で接触時間を表現)
+                let pi = core::f32::consts::PI;
+                let t_c_samples_f = t_c_samples as f32;
+                for (i, sample) in buf.iter_mut().take(t_c_samples).enumerate() {
+                    let phi = (i as f32 / t_c_samples_f) * pi;
+                    let s = phi.sin();
+                    *sample = amplitude * s * s;
+                }
+
+                // 3) velocity 依存 1pole IIR LPF を全 len_int に適用
                 let alpha = (1.0
-                    - (-2.0 * core::f32::consts::PI * cutoff_hz / self.sample_rate).exp())
+                    - (-2.0 * core::f32::consts::PI * f_c_hz / self.sample_rate).exp())
                 .clamp(0.001, 0.999);
                 let mut z = 0.0_f32;
                 for sample in buf.iter_mut().take(len_int) {
@@ -797,9 +817,10 @@ mod excitation_tests {
         );
     }
 
-    /// Phase 4b D61: dispersion_active=true で hammer 経路 (Commuted impulse + velocity LPF)
-    /// が使われる。pluck 経路の noise burst では隣接 sample 間の符号反転が頻発するが、
-    /// hammer 経路では impulse + LPF 平滑化のため buffer 前半が単調減衰となる。
+    /// Phase 4c Step 6 (D74 / D75): dispersion_active=true で Hertz law raised cosine hammer
+    /// 経路 (raised cosine `sin²` + velocity LPF) が使われる。pluck 経路の noise burst は
+    /// 隣接 sample 間で頻繁に符号反転するが、raised cosine 経路では `sin²` の連続性に
+    /// LPF が重なるため早期領域は単調に立ち上がり、ピークが中央付近 (t_c/2) に出現する。
     #[test]
     fn test_note_on_with_dispersion_active_uses_hammer_excitation() {
         let mut v = KarplusStrong::new();
@@ -808,30 +829,44 @@ mod excitation_tests {
         v.note_on(440.0, 0.8);
 
         let snapshot = v.excitation_snapshot();
-        // hammer 経路: buffer[0] が impulse の平滑化結果として最大、続く buffer[i] が
-        // 1pole LPF の応答で単調減衰。velocity=0.8 で cutoff = 800 + 0.8*4700 = 4560 Hz
-        // (Phase 4c で HIGH 5500 に拡張)、alpha = 1 - exp(-2π·4560/48000) ≈ 0.450、
-        // y[1] = α·0 + (1-α)·y[0] ≈ 0.550·y[0]
+        // velocity=0.8 で t_c_ms = 4.0 - 2.8·0.8 = 1.76 ms、48 kHz で t_c_samples ≈ 84。
+        // raised cosine + LPF でピークは中央付近 (i ~ t_c/2 = 42) 周辺に出現する。
+        let scan_end = 130.min(snapshot.len());
+        let (max_idx, max_val) = snapshot
+            .iter()
+            .take(scan_end)
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                a.abs()
+                    .partial_cmp(&b.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, v)| (i, *v))
+            .expect("snapshot must be non-empty");
         assert!(
-            snapshot[0].abs() > 0.0,
-            "buffer[0] must carry impulse energy, got {}",
-            snapshot[0]
+            (15..120).contains(&max_idx),
+            "Hertz hammer peak should land near t_c/2 (~20..120), got idx {}",
+            max_idx
         );
-        let r = snapshot[1] / snapshot[0];
         assert!(
-            (0.3..=0.95).contains(&r),
-            "1pole LPF decay ratio buffer[1]/buffer[0] should be in [0.3, 0.95], got {}",
-            r
+            max_val > 0.1,
+            "Hertz hammer peak amplitude must be substantial, got {}",
+            max_val
         );
-        // 単調減衰 (符号変化なし) を最低 4 sample まで確認
-        for i in 1..4.min(snapshot.len()) {
-            assert!(
-                snapshot[i].signum() == snapshot[0].signum() || snapshot[i].abs() < 1.0e-9,
-                "hammer LPF should produce monotonic decay without sign change, buf[{}]={}",
-                i,
-                snapshot[i]
-            );
-        }
+        // 早期領域 (0..max_idx) は raised cosine + LPF の立ち上がりで sign change が殆ど無い。
+        let early_sign_changes: usize = (1..max_idx)
+            .filter(|i| {
+                snapshot[*i].signum() != snapshot[i - 1].signum()
+                    && snapshot[*i].abs() > 1.0e-9
+                    && snapshot[i - 1].abs() > 1.0e-9
+            })
+            .count();
+        assert!(
+            early_sign_changes <= 2,
+            "Hertz hammer rise should be smooth (few sign changes), got {} in 0..{}",
+            early_sign_changes,
+            max_idx
+        );
     }
 
     #[test]
