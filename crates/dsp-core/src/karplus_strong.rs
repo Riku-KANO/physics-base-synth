@@ -19,6 +19,13 @@ pub(crate) const FRACTIONAL_DELAY_BUFFER_MARGIN: usize = 1;
 /// Phase 4c D70 / D71: 1 voice あたりの最大弦数 (Piano は 1/2/3、他は 1)。
 pub const MAX_STRINGS_PER_VOICE: usize = 3;
 
+/// Phase 4c R44 緩和策 3 (Bridge coupling 案 B): 弦間 cross-feed 係数。
+/// 各弦の write-back 値を `own × (1 - g(N-1)) + g × sum_other` で混合することで、
+/// in-phase モードを早く減衰させ out-of-phase モードを残す two-stage decay を模倣。
+/// 保存型 (gain 行列の最大固有値 = 1) のため発散しない。N=1 経路では sum_other = 0 で
+/// byte 一致継承 (D83 / F61-a)。
+const BRIDGE_COUPLING_G: f32 = 0.05;
+
 /// Phase 4c D69: MIDI ノート番号から弦数を決定する (鍵盤位置依存)。
 /// - A0..=A1 (21..=33): 1 弦 (低音域、太い銅線 1 本構成のため unison なし)
 /// - A#1..=B2 (34..=47): 2 弦 (中低域)
@@ -658,11 +665,14 @@ impl KarplusStrong {
         let mut sum_thiran = 0.0_f32;
         let mut last_damped = 0.0_f32;
 
-        // Phase 4c D70: 弦個別の KS ループ。
-        // 各弦で read → dispersion → Thiran → brightness LPF → loss filter → damping write back
-        // を実行する。brightness LPF (`last_filter_out`) と `loss_filter` は voice 共有状態で、
-        // 弦数 N=1 経路では Phase 4b と byte 一致 (D83 / F61-a)。N>1 経路では弦間で順次更新する
-        // ことで Piano が Phase 4b から意図的に divergent な出力を持つ (F61-b)。
+        // Phase 4c R44 緩和策 3 (Bridge coupling 案 B): write-back 時に弦間 cross-feed を
+        // 加算するため、まず各弦の loss_out を配列に保存してから二巡目で write back する。
+        // N=1 経路は cross-feed sum が 0 のため Phase 4b / Phase 4a byte 一致継承 (D83)。
+        let mut loss_out_per_string = [0.0_f32; MAX_STRINGS_PER_VOICE];
+        let mut active_string_mask = [false; MAX_STRINGS_PER_VOICE];
+
+        // Pass 1: read → dispersion → Thiran → brightness LPF → loss filter を各弦で実行し
+        // loss_out を保存。brightness LPF / loss_filter は voice 共有状態で順次更新。
         for string_idx in 0..n_strings {
             let buf = &mut self.string_buffers[string_idx];
             let state = &mut self.string_states[string_idx];
@@ -693,20 +703,44 @@ impl KarplusStrong {
             // Phase 3 D38: loss filter (周波数依存 1pole IIR、voice 共有 state)。
             let loss_out = self.loss_filter.process_sample(filtered);
 
-            // Phase 4c D76: damping + bus feedback。bus_feedback は Engine から
-            // `inject_feedback` 経由で受領した `bus_out_prev × feedback_gain` の値。
-            // feedback_gain=0 (Default kind / Piano Sustain OFF) では 0 加算で Phase 4a / 4b と
-            // byte 一致 (F65-a)。
-            let mut damped = d * loss_out + bus_feedback;
+            loss_out_per_string[string_idx] = loss_out;
+            active_string_mask[string_idx] = true;
+            sum_thiran += read_value;
+        }
+
+        // Pass 2: Bridge coupling 適用後の damping + bus feedback で write back。
+        // 保存型 cross-feed: `coupled = own × (1 - g(N-1)) + g × sum_other`
+        //                  = `own + g × (sum_all - N×own)`
+        //                  = `own × (1 - g) + g × (sum_all - own)` (N=2 の場合)
+        // N=1 のとき sum_other = 0、coupled = own × 1 = own で Phase 4b 同型 (byte match)。
+        // N=3 (Piano) のとき in-phase は `own × (1-2g) + 2g × own = own` × ... ではなく
+        // gain 行列の固有値で評価: in-phase eigenvalue = 1 (sum_all 同符号で保存)、
+        // out-of-phase eigenvalues = 1 - Ng (string が逆位相だと early に減衰)。
+        let sum_all_loss: f32 = loss_out_per_string.iter().take(n_strings).sum();
+        let g = BRIDGE_COUPLING_G;
+        for string_idx in 0..n_strings {
+            if !active_string_mask[string_idx] {
+                continue;
+            }
+            let own = loss_out_per_string[string_idx];
+            let sum_other = sum_all_loss - own;
+            let n_other = (n_strings - 1) as f32;
+            // 保存型: own を g(N-1) 抜いて、抜いた分を sum_other 経由で受け取る。
+            // N=1 で n_other=0 のため coupled = own、byte 一致継承。
+            let coupled = own * (1.0 - g * n_other) + g * sum_other;
+
+            let mut damped = d * coupled + bus_feedback;
             // denormal flush (D6)
             damped += 1.0e-25;
             damped -= 1.0e-25;
 
+            let buf = &mut self.string_buffers[string_idx];
+            let state = &mut self.string_states[string_idx];
+            let buf_len = buf.len();
             buf[state.write_idx] = damped;
             let next_write = state.write_idx + 1;
             state.write_idx = if next_write == buf_len { 0 } else { next_write };
 
-            sum_thiran += read_value;
             last_damped = damped;
         }
 
