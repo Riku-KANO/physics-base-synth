@@ -243,14 +243,65 @@ fn test_apply_instrument_piano_modal_coeffs() {
 #[test]
 fn test_body_modes_for_instrument_piano() {
     use dsp_core::params::{body_modes_for_instrument, BODY_MODES_PIANO_L, BODY_MODES_PIANO_R};
-    // const は inline 展開され同一アドレスにならないため、値で比較する
+    // const は inline 展開され同一アドレスにならないため、値で比較する。
+    // Phase 4c R44 緩和策 2: Piano は 16 modes に拡張、戻り値は slice 化。
     let (l, r) = body_modes_for_instrument(InstrumentKind::Piano);
-    for i in 0..8 {
+    assert_eq!(l.len(), 16, "Phase 4c Piano should have 16 modes");
+    assert_eq!(r.len(), 16);
+    for i in 0..16 {
         assert!((l[i].freq - BODY_MODES_PIANO_L[i].freq).abs() < 1e-6);
         assert!((l[i].q - BODY_MODES_PIANO_L[i].q).abs() < 1e-6);
         assert!((l[i].gain - BODY_MODES_PIANO_L[i].gain).abs() < 1e-6);
         assert!((r[i].freq - BODY_MODES_PIANO_R[i].freq).abs() < 1e-6);
     }
+}
+
+/// Phase 4c R44 緩和策 2: Default 等の非 Piano は 8 modes 維持、Piano のみ 16 modes。
+#[test]
+fn test_body_modes_per_instrument_mode_count() {
+    use dsp_core::params::body_modes_for_instrument;
+    for kind in [
+        InstrumentKind::Default,
+        InstrumentKind::GuitarClassical,
+        InstrumentKind::Ukulele,
+        InstrumentKind::Mandolin,
+        InstrumentKind::Bass,
+        InstrumentKind::GuitarSteel,
+        InstrumentKind::Sitar,
+    ] {
+        let (l, r) = body_modes_for_instrument(kind);
+        assert_eq!(
+            l.len(),
+            8,
+            "{:?} should have 8 modes (Phase 4b 互換性)",
+            kind
+        );
+        assert_eq!(r.len(), 8);
+    }
+    let (l, r) = body_modes_for_instrument(InstrumentKind::Piano);
+    assert_eq!(l.len(), 16);
+    assert_eq!(r.len(), 16);
+}
+
+/// Phase 4c R44 緩和策 2: Engine::apply_instrument で modal_body.num_modes_l/r が
+/// 楽器に応じ 8 / 16 に切替わる。
+#[test]
+fn test_apply_instrument_updates_modal_num_modes() {
+    let mut engine = Engine::new();
+    engine.prepare(48_000.0, 128);
+    // Default: 8 modes
+    assert_eq!(engine.modal_body().num_modes_l(), 8);
+    assert_eq!(engine.modal_body().num_modes_r(), 8);
+
+    // Piano: 16 modes
+    engine.apply_instrument(InstrumentKind::Piano);
+    assert_eq!(engine.modal_body().num_modes_l(), 16);
+    assert_eq!(engine.modal_body().num_modes_r(), 16);
+
+    // Piano → Default で 8 に戻る
+    engine.apply_instrument(InstrumentKind::Default);
+    assert_eq!(engine.modal_body().num_modes_l(), 8);
+    assert_eq!(engine.modal_body().num_modes_r(), 8);
 }
 
 #[test]

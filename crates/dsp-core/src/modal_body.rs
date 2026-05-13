@@ -1,8 +1,12 @@
-//! ModalBodyResonator (Phase 3 D30 / D31 / D32 / R24)
+//! ModalBodyResonator (Phase 3 D30 / D31 / D32 / R24 + Phase 4c R44 緩和策 2)
 //!
-//! 楽器ボディ共鳴を 8 つの並列 bandpass biquad で再現。`Engine::process` で
+//! 楽器ボディ共鳴を最大 16 の並列 bandpass biquad で再現。`Engine::process` で
 //! `pool.process_sample()` 後・`output_gain` 前に挿入。stereo は左右で独立した
-//! 係数（`STEREO_SPREAD = 0.05` で偶奇 index 反転）。
+//! 係数（`STEREO_SPREAD` で偶奇 index 反転）。
+//!
+//! 楽器ごとの mode 数:
+//! - Default / 6 楽器 (Phase 4a) + Piano (Phase 4b 8 modes) = 8 mode 構成
+//! - Piano (Phase 4c R44 緩和策 2): 16 mode に拡張、追加 8 modes は 3.2-19 kHz の brilliance/sparkle 帯
 //!
 //! biquad 形（RBJ "Audio EQ Cookbook" の constant peak gain Q bandpass）:
 //!   H(z) = (b0 + b2·z⁻²) / (1 + a1·z⁻¹ + a2·z⁻²)
@@ -19,7 +23,9 @@ use crate::params::{
     body_modes_for_instrument, BodyMode, InstrumentKind, BODY_MODES_L, BODY_MODES_R,
 };
 
-const NUM_MODES: usize = 8;
+/// Phase 4c R44 緩和策 2: 最大 mode 数 (Piano の 16 に合わせて拡張)。Default 等の 8 mode
+/// 楽器はこの array の 0..8 のみ使用、`num_modes_l/r` でループ範囲を絞る。
+pub const MAX_MODES: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 struct ModeCoeffs {
@@ -36,10 +42,14 @@ struct ModeState {
 }
 
 pub struct ModalBodyResonator {
-    coeffs_l: [ModeCoeffs; NUM_MODES],
-    coeffs_r: [ModeCoeffs; NUM_MODES],
-    states_l: [ModeState; NUM_MODES],
-    states_r: [ModeState; NUM_MODES],
+    coeffs_l: [ModeCoeffs; MAX_MODES],
+    coeffs_r: [ModeCoeffs; MAX_MODES],
+    states_l: [ModeState; MAX_MODES],
+    states_r: [ModeState; MAX_MODES],
+    /// Phase 4c R44 緩和策 2: 現在 active な mode 数 (L/R 同数想定だが分離保持)。
+    /// Default 等 7 楽器で 8、Piano (Phase 4c) で 16。
+    num_modes_l: usize,
+    num_modes_r: usize,
     sample_rate: f32,
 }
 
@@ -53,41 +63,86 @@ impl ModalBodyResonator {
         };
         const ZERO_S: ModeState = ModeState { z1: 0.0, z2: 0.0 };
         Self {
-            coeffs_l: [ZERO_C; NUM_MODES],
-            coeffs_r: [ZERO_C; NUM_MODES],
-            states_l: [ZERO_S; NUM_MODES],
-            states_r: [ZERO_S; NUM_MODES],
+            coeffs_l: [ZERO_C; MAX_MODES],
+            coeffs_r: [ZERO_C; MAX_MODES],
+            states_l: [ZERO_S; MAX_MODES],
+            states_r: [ZERO_S; MAX_MODES],
+            num_modes_l: BODY_MODES_L.len(),
+            num_modes_r: BODY_MODES_R.len(),
             sample_rate: 48000.0,
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        for i in 0..NUM_MODES {
-            self.coeffs_l[i] = calc_coeffs(BODY_MODES_L[i], sample_rate);
-            self.coeffs_r[i] = calc_coeffs(BODY_MODES_R[i], sample_rate);
+        // BODY_MODES_L / R は Default kind 8 modes の alias (Phase 3 互換)。
+        self.num_modes_l = BODY_MODES_L.len();
+        self.num_modes_r = BODY_MODES_R.len();
+        for (dst, mode) in self
+            .coeffs_l
+            .iter_mut()
+            .zip(BODY_MODES_L.iter())
+            .take(self.num_modes_l)
+        {
+            *dst = calc_coeffs(*mode, sample_rate);
+        }
+        for (dst, mode) in self
+            .coeffs_r
+            .iter_mut()
+            .zip(BODY_MODES_R.iter())
+            .take(self.num_modes_r)
+        {
+            *dst = calc_coeffs(*mode, sample_rate);
+        }
+        // 残り (8..16) の coeffs は zero のまま、状態クリアで初期化。
+        for dst in self.coeffs_l.iter_mut().skip(self.num_modes_l) {
+            *dst = ZERO_COEFFS;
+        }
+        for dst in self.coeffs_r.iter_mut().skip(self.num_modes_r) {
+            *dst = ZERO_COEFFS;
         }
         self.reset();
     }
 
     pub fn reset(&mut self) {
-        for i in 0..NUM_MODES {
+        // active / inactive 全 slot をクリア (楽器切替で前の状態が残らないため)。
+        for i in 0..MAX_MODES {
             self.states_l[i] = ModeState { z1: 0.0, z2: 0.0 };
             self.states_r[i] = ModeState { z1: 0.0, z2: 0.0 };
         }
     }
 
-    /// Phase 4a D52 / D53: 楽器切替で Modal 係数を新セットに差し替え、状態クリア。
-    /// `Engine::apply_instrument` から呼ばれる。
-    /// `body_modes_for_instrument(kind)` が返す L/R それぞれの 8 モードを `calc_coeffs` で
-    /// biquad 係数に変換し、`coeffs_l/r` を上書き。`reset()` で z1/z2 状態をクリアする
-    /// (楽器切替で過去の共鳴を引きずらない)。
+    /// Phase 4a D52 / D53 + Phase 4c R44 緩和策 2: 楽器切替で Modal 係数を新セットに差し替え、
+    /// 状態クリア。`Engine::apply_instrument` から呼ばれる。
+    /// `body_modes_for_instrument(kind)` が返す L/R それぞれの slice 長を `num_modes_l/r` に
+    /// 反映 (Default 等 = 8、Piano = 16)。未使用 slot の coeffs はゼロクリア + state も reset
+    /// で「楽器切替で過去の共鳴を引きずらない」を保つ。
     pub fn set_instrument(&mut self, kind: InstrumentKind, sample_rate: f32) {
         self.sample_rate = sample_rate;
         let (l_modes, r_modes) = body_modes_for_instrument(kind);
-        for i in 0..NUM_MODES {
-            self.coeffs_l[i] = calc_coeffs(l_modes[i], sample_rate);
-            self.coeffs_r[i] = calc_coeffs(r_modes[i], sample_rate);
+        self.num_modes_l = l_modes.len();
+        self.num_modes_r = r_modes.len();
+        for (dst, mode) in self
+            .coeffs_l
+            .iter_mut()
+            .zip(l_modes.iter())
+            .take(self.num_modes_l)
+        {
+            *dst = calc_coeffs(*mode, sample_rate);
+        }
+        for (dst, mode) in self
+            .coeffs_r
+            .iter_mut()
+            .zip(r_modes.iter())
+            .take(self.num_modes_r)
+        {
+            *dst = calc_coeffs(*mode, sample_rate);
+        }
+        for dst in self.coeffs_l.iter_mut().skip(self.num_modes_l) {
+            *dst = ZERO_COEFFS;
+        }
+        for dst in self.coeffs_r.iter_mut().skip(self.num_modes_r) {
+            *dst = ZERO_COEFFS;
         }
         self.reset();
     }
@@ -110,20 +165,37 @@ impl ModalBodyResonator {
         self.states_l[mode_index].z1
     }
 
+    /// Phase 4c test-only: 現在の L 側 active mode 数 (Default = 8, Piano = 16)。
+    #[doc(hidden)]
+    pub fn num_modes_l(&self) -> usize {
+        self.num_modes_l
+    }
+
+    /// Phase 4c test-only: 現在の R 側 active mode 数。
+    #[doc(hidden)]
+    pub fn num_modes_r(&self) -> usize {
+        self.num_modes_r
+    }
+
     /// 1 サンプル入力に対し左右 2 サンプル出力（並列加算、Direct Form II Transposed）。
     /// y = b0·x + z1; z1 = z2 - a1·y; z2 = b2·x - a2·y
+    ///
+    /// Phase 4c R44 緩和策 2: ループ範囲を `num_modes_l/r` で絞ることで、Default 等の 8 mode
+    /// 楽器は Phase 4a / 4b と同型 (= byte 一致継承)。Piano (16 mode) のときは追加 8 modes も
+    /// 処理する。
     #[inline(always)]
     pub fn process_sample(&mut self, x: f32) -> (f32, f32) {
         let mut y_l = 0.0_f32;
         let mut y_r = 0.0_f32;
-        for i in 0..NUM_MODES {
+        for i in 0..self.num_modes_l {
             let c = self.coeffs_l[i];
             let s = &mut self.states_l[i];
             let y = c.b0 * x + s.z1;
             s.z1 = s.z2 - c.a1 * y;
             s.z2 = c.b2 * x - c.a2 * y;
             y_l += y;
-
+        }
+        for i in 0..self.num_modes_r {
             let c = self.coeffs_r[i];
             let s = &mut self.states_r[i];
             let y = c.b0 * x + s.z1;
@@ -135,6 +207,13 @@ impl ModalBodyResonator {
         (y_l + 1e-25 - 1e-25, y_r + 1e-25 - 1e-25)
     }
 }
+
+const ZERO_COEFFS: ModeCoeffs = ModeCoeffs {
+    b0: 0.0,
+    b2: 0.0,
+    a1: 0.0,
+    a2: 0.0,
+};
 
 impl Default for ModalBodyResonator {
     fn default() -> Self {
