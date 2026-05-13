@@ -138,6 +138,30 @@ function validateInstruments(instruments) {
 					`instruments[${i}] (Piano): hammer_cutoff_high_hz must be greater than hammer_cutoff_low_hz, got high=${ins.hammer_cutoff_high_hz}, low=${ins.hammer_cutoff_low_hz}`
 				);
 			}
+			// Phase 4c D72 / D77 / D78: Piano-only fields driven by params.json.
+			if (typeof ins.unison_detune_cents !== 'number' || !Number.isFinite(ins.unison_detune_cents) || ins.unison_detune_cents < 0) {
+				throw new Error(
+					`instruments[${i}] (Piano): unison_detune_cents must be a non-negative finite number, got ${ins.unison_detune_cents}`
+				);
+			}
+			if (typeof ins.sympathetic_amount !== 'number' || !Number.isFinite(ins.sympathetic_amount) || ins.sympathetic_amount < 0 || ins.sympathetic_amount > 1.0) {
+				throw new Error(
+					`instruments[${i}] (Piano): sympathetic_amount must be in [0.0, 1.0], got ${ins.sympathetic_amount}`
+				);
+			}
+			if (!Array.isArray(ins.inharmonicity_b_curve) || ins.inharmonicity_b_curve.length !== 88) {
+				throw new Error(
+					`instruments[${i}] (Piano): inharmonicity_b_curve must be an array of length 88 (A0=21..C8=108), got length ${Array.isArray(ins.inharmonicity_b_curve) ? ins.inharmonicity_b_curve.length : typeof ins.inharmonicity_b_curve}`
+				);
+			}
+			for (let k = 0; k < ins.inharmonicity_b_curve.length; k++) {
+				const value = ins.inharmonicity_b_curve[k];
+				if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+					throw new Error(
+						`instruments[${i}] (Piano): inharmonicity_b_curve[${k}] must be a positive finite number, got ${value}`
+					);
+				}
+			}
 		}
 	}
 }
@@ -324,14 +348,26 @@ export function generateRustSource(paramsJson) {
 		lines.push(`pub const INSTRUMENT_KIND_COUNT: usize = ${instruments.length};`);
 		lines.push('');
 
-		// Phase 4b D58 / D61 / D62: Piano 専用フィールド (Piano kind のみ持つ)。
-		// Phase 4b では Piano 1 機種なので const として出力。複数 Piano 機種を扱う Phase 4c で
-		// 楽器ごとの固有値を保持する設計に切り替える想定。
+		// Phase 4b D58 / D61 / D62 + Phase 4c D72 / D75 / D77 / D78: Piano 専用フィールド
+		// (Piano kind のみ持つ)。Phase 4b では Piano 1 機種なので const として出力、
+		// 複数 Piano 機種を扱う Phase 4d で楽器ごとの固有値を保持する設計に切り替える想定。
 		const piano = instruments.find((i) => i.kind === 'Piano');
 		if (piano) {
 			lines.push(`pub const INHARMONICITY_B_PIANO: f32 = ${formatF32(piano.inharmonicity_b)};`);
 			lines.push(`pub const HAMMER_CUTOFF_LOW_PIANO: f32 = ${formatF32(piano.hammer_cutoff_low_hz)};`);
 			lines.push(`pub const HAMMER_CUTOFF_HIGH_PIANO: f32 = ${formatF32(piano.hammer_cutoff_high_hz)};`);
+			lines.push(`pub const UNISON_DETUNE_CENTS_PIANO: f32 = ${formatF32(piano.unison_detune_cents)};`);
+			lines.push(`pub const SYMPATHETIC_AMOUNT_PIANO: f32 = ${formatF32(piano.sympathetic_amount)};`);
+			lines.push('');
+			// Phase 4c D78 / D79: 88 鍵 × f32 LUT (A0=21..C8=108)。
+			// `dispersion::b_curve_piano(midi)` が `midi.clamp(21, 108) - 21` を index に引く。
+			lines.push('#[rustfmt::skip]');
+			lines.push(`pub const INHARMONICITY_B_CURVE_PIANO: [f32; 88] = [`);
+			for (let row = 0; row < 11; row++) {
+				const chunk = piano.inharmonicity_b_curve.slice(row * 8, row * 8 + 8);
+				lines.push('    ' + chunk.map((v) => formatF32(v)).join(', ') + ',');
+			}
+			lines.push('];');
 			lines.push('');
 		}
 
@@ -479,13 +515,23 @@ export function generateTsSource(paramsJson) {
 		lines.push(`export const INSTRUMENT_KIND_COUNT = ${instruments.length};`);
 		lines.push('');
 
-		// Phase 4b D58 / D61 / D62: Piano 専用フィールド (TS 側にも出力、UI で参照する用途、
-		// drift 防止)。Phase 4b では Piano UI スライダーは未実装、Phase 4c で追加予定。
+		// Phase 4b D58 / D61 / D62 + Phase 4c D72 / D75 / D77 / D78: Piano 専用フィールド
+		// (TS 側にも出力、UI / preset で参照する用途、drift 防止)。UI 露出は Phase 4d 送り (D81)。
 		const piano = instruments.find((i) => i.kind === 'Piano');
 		if (piano) {
 			lines.push(`export const INHARMONICITY_B_PIANO = ${formatTsNumber(piano.inharmonicity_b)};`);
 			lines.push(`export const HAMMER_CUTOFF_LOW_PIANO = ${formatTsNumber(piano.hammer_cutoff_low_hz)};`);
 			lines.push(`export const HAMMER_CUTOFF_HIGH_PIANO = ${formatTsNumber(piano.hammer_cutoff_high_hz)};`);
+			lines.push(`export const UNISON_DETUNE_CENTS_PIANO = ${formatTsNumber(piano.unison_detune_cents)};`);
+			lines.push(`export const SYMPATHETIC_AMOUNT_PIANO = ${formatTsNumber(piano.sympathetic_amount)};`);
+			lines.push('');
+			lines.push('export const INHARMONICITY_B_CURVE_PIANO: readonly number[] = [');
+			for (let row = 0; row < 11; row++) {
+				const chunk = piano.inharmonicity_b_curve.slice(row * 8, row * 8 + 8);
+				const last = row === 10;
+				lines.push('\t' + chunk.map((v) => formatTsNumber(v)).join(', ') + (last ? '' : ','));
+			}
+			lines.push('] as const;');
 			lines.push('');
 		}
 	}
