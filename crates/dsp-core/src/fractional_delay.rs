@@ -58,7 +58,7 @@ pub struct ThiranCoeffs {
 }
 
 impl ThiranCoeffs {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             a1: 0.0,
             z1_in: 0.0,
