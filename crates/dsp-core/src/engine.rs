@@ -7,6 +7,7 @@ use crate::params::{
     HAMMER_CUTOFF_HIGH_PIANO, HAMMER_CUTOFF_LOW_PIANO, OUTPUT_GAIN_DEFAULT, PICK_POSITION_DEFAULT,
     STEREO_SPREAD_DEFAULT, SYMPATHETIC_AMOUNT_PIANO, UNISON_DETUNE_CENTS_PIANO,
 };
+use crate::resonance_bus::{ResonanceBus, FEEDBACK_GAIN_MAX};
 use crate::smoothing::SmoothedValue;
 use crate::soft_clip::soft_clip;
 use crate::sustain_state::SustainState;
@@ -44,6 +45,11 @@ const VOICE_STATE_WRITE_STRIDE: u32 = 1024;
 
 /// mono モード復帰時のデフォルト velocity。Phase 3 で「note_off されたキーの velocity を保持」へ拡張候補。
 const MONO_REVIVE_VELOCITY: f32 = 0.8;
+
+/// Phase 4c D76: bus_out を modal_body 入力に直接ミックスする際の係数。
+/// `bus_mix = feedback_gain / FEEDBACK_GAIN_MAX` で 0..=1 の gate を掛けた上で乗算する。
+/// 0.5 は pre-research §5.5 の典型値、Step 14 聴感判断で調整余地あり。
+const BUS_DIRECT_MIX_GAIN: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthMode {
@@ -104,10 +110,12 @@ pub struct Engine {
     /// Phase 4c D75: Hertz hammer cutoff の上下限 (Piano プリセット由来)。非 Piano では 0。
     hammer_cutoff_low_hz: f32,
     hammer_cutoff_high_hz: f32,
-    /// Phase 4c D76: 前 sample の bus_out。Step 10 の `process` 内で
+    /// Phase 4c D76: 前 sample の bus_out。`process` 内で
     /// `pool.process_sample_with_feedback(bus_out_prev, feedback_gain)` 経由で各 voice に注入。
-    /// Step 8 ではフィールドだけ追加、Step 10 で使用開始。
     bus_out_prev: f32,
+    /// Phase 4c D76: Global sympathetic resonance bus。`Engine::process` の per-sample loop で
+    /// `next_feedback_gain` + `process(dry)` を駆動し、bus_out を出力にミックスする。
+    resonance_bus: ResonanceBus,
 }
 
 impl Engine {
@@ -141,6 +149,7 @@ impl Engine {
             hammer_cutoff_low_hz: 0.0,
             hammer_cutoff_high_hz: 0.0,
             bus_out_prev: 0.0,
+            resonance_bus: ResonanceBus::new(),
         }
     }
 
@@ -261,15 +270,33 @@ impl Engine {
                 self.channel_volume.set_target(v);
             }
             CC_SUSTAIN_PEDAL => {
-                // ≥ 64 (= 0.5 normalized) で on
-                let released = self.sustain_state.set_active(v >= 0.5);
+                // ≥ 64 (= 0.5 normalized) で on。
+                // Phase 3 D40 既存: pending release bitmap を `release_pending` に渡すペアは
+                // 絶対に維持 (落とすと Sustain OFF 時の保留 note_off が解放されない)。
+                let on = v >= 0.5;
+                let released = self.sustain_state.set_active(on);
                 self.release_pending(released);
+
+                // Phase 4c D77: Piano kind + Sustain ON で sympathetic resonance を有効化。
+                // target = `sympathetic_amount × FEEDBACK_GAIN_MAX`、SmoothedValue で滑らかに収束。
+                // Default 等の非 Piano では Engine の `sympathetic_amount = 0` のため target も 0。
+                let target_gain = if matches!(self.current_instrument, InstrumentKind::Piano) && on
+                {
+                    self.sympathetic_amount * FEEDBACK_GAIN_MAX
+                } else {
+                    0.0
+                };
+                self.resonance_bus.set_feedback_gain_target(target_gain);
             }
             CC_ALL_NOTES_OFF => {
                 // P1-1: sustain も reset しないと古い pending が次の CC#64 操作で再処理される
                 self.pool.all_notes_off();
                 self.hold_stack.clear();
                 self.sustain_state.reset();
+                // Phase 4c D76: bus も完全リセット。次の CC#64 ON 操作で動的に立ち上がる。
+                self.resonance_bus.set_feedback_gain_target(0.0);
+                self.resonance_bus.reset();
+                self.bus_out_prev = 0.0;
             }
             _ => {}
         }
@@ -367,6 +394,40 @@ impl Engine {
         self.pool.voice_dispersion_active_for_test(i)
     }
 
+    /// Phase 4c test-only: SustainState::active を観測 (F65-b/c/d / F68-c)。
+    /// 既存の `sustain_active` accessor は `sustain_state.active` を直接読むため互換性のため残置、
+    /// 新 accessor は `for_test` 命名規約で揃える。
+    #[doc(hidden)]
+    pub fn sustain_active_for_test(&self) -> bool {
+        self.sustain_state.active
+    }
+
+    /// Phase 4c test-only: ResonanceBus の feedback_gain target を観測 (F65-b/c/d/e / F68-c)。
+    #[doc(hidden)]
+    pub fn resonance_feedback_target_for_test(&self) -> f32 {
+        self.resonance_bus.feedback_gain_target_for_test()
+    }
+
+    /// Phase 4c test-only: ResonanceBus の delay line に残る最大振幅 (F65-h / F65-i)。
+    /// `apply_instrument` / CC#123 後に 0 になることを確認するために使用。
+    #[doc(hidden)]
+    pub fn resonance_bus_buffer_max_amplitude_for_test(&self) -> f32 {
+        self.resonance_bus.buffer_max_amplitude_for_test()
+    }
+
+    /// Phase 4c test-only: ResonanceBus への read-only access (Step 12 で sympathetic_tests から
+    /// 内部 process / next_feedback_gain を呼びたい場合に使用)。
+    #[doc(hidden)]
+    pub fn resonance_bus_mut_for_test(&mut self) -> &mut ResonanceBus {
+        &mut self.resonance_bus
+    }
+
+    /// Phase 4c test-only: 現在の bus_out_prev (Step 10 後の per-sample loop で更新される値)。
+    #[doc(hidden)]
+    pub fn bus_out_prev_for_test(&self) -> f32 {
+        self.bus_out_prev
+    }
+
     /// Phase 3 D41: Voice State 共有メモリへのポインタ。
     /// 33 bytes (active mask 1 byte + 8 振幅 × 4 bytes、little-endian)。
     /// `Engine::process` 終端で書き込まれる、JS 側からは `Uint8Array` view で読む。
@@ -421,8 +482,13 @@ impl Engine {
         self.pool
             .set_piano_params(detune, 0.0, cutoff_low, cutoff_high);
 
-        // Phase 4c: bus_out_prev を切替時にクリア。ResonanceBus 本体は Step 10 で追加されるが、
-        // Engine フィールドの bus_out_prev は Step 8 でフィールド導入済のため整合性のために初期化。
+        // Phase 4c D76: 楽器切替で bus 内部状態を完全リセット。`sustain_state.reset()` が
+        // 既に呼ばれているため target も無条件 0 にする (CC#64 再送で動的に立ち上げる経路は
+        // `handle_midi_cc(CC_SUSTAIN_PEDAL, ≥0.5)` 経由)。bus_mix gate (feedback_gain=0 で 0)
+        // で modal_body 入力への寄与は止まるが、bus 内部の delay line に dry が残らないよう
+        // 完全クリアすることで「Piano → Default 切替後の Phase 4a HEAD byte 一致」と整合する。
+        self.resonance_bus.set_feedback_gain_target(0.0);
+        self.resonance_bus.reset();
         self.bus_out_prev = 0.0;
     }
 
@@ -541,6 +607,11 @@ impl AudioProcessor for Engine {
             .set_time_constant(sample_rate, LFO_DEPTH_TAU);
         self.lfo_volume_depth
             .set_time_constant(sample_rate, LFO_DEPTH_TAU);
+
+        // Phase 4c D76: ResonanceBus を sample_rate で初期化。Step 9 で構築済 module の
+        // `prepare(fs)` を 1 回だけ呼び、buffer / lpf_alpha / feedback_gain smoother を確定。
+        self.resonance_bus.prepare(sample_rate);
+        self.bus_out_prev = 0.0;
     }
 
     fn process(&mut self, output_l: &mut [f32], output_r: &mut [f32]) {
@@ -570,8 +641,25 @@ impl AudioProcessor for Engine {
             let volume_multiplier = 1.0
                 + lfo_value * self.lfo_volume_depth.next_sample() * mod_wheel_v * LFO_VOLUME_SCALE;
 
-            let dry = self.pool.process_sample();
-            let (body_l, body_r) = self.modal_body.process_sample(dry);
+            // Phase 4c D76: bus feedback_gain を 1 sample 進めてから voice 側に注入。
+            // feedback_gain = 0 (Default kind / Piano + Sustain OFF) では inject = 0 で
+            // 各 voice の bus_feedback_pending が 0、Phase 4a HEAD と byte 一致継承 (F65-a)。
+            let feedback_gain = self.resonance_bus.next_feedback_gain();
+            let dry = self
+                .pool
+                .process_sample_with_feedback(self.bus_out_prev, feedback_gain);
+
+            // Phase 4c D76: bus は dry で常に駆動して内部状態を進めるが、出力寄与は後段
+            // `bus_mix` で gate する。bus_out_prev を更新して次 sample の voice 注入に使う。
+            let bus_out = self.resonance_bus.process(dry);
+            self.bus_out_prev = bus_out;
+
+            // Phase 4c: bus_mix = feedback_gain / FEEDBACK_GAIN_MAX で 0..=1 の gate を作り、
+            // modal_body 入力に bus_out を直接ミックスする。feedback_gain=0 で bus_mix=0 →
+            // 入力は `dry + 0.0` = `dry` で Phase 4b と byte 一致 (F61-e / F65-g)。
+            let bus_mix = feedback_gain * (1.0 / FEEDBACK_GAIN_MAX);
+            let modal_in = dry + bus_out * BUS_DIRECT_MIX_GAIN * bus_mix;
+            let (body_l, body_r) = self.modal_body.process_sample(modal_in);
             let wet = self.body_wet.next_sample();
             let dry_amount = 1.0 - wet;
             let mixed_l = dry_amount * dry + wet * body_l;
@@ -625,6 +713,8 @@ impl AudioProcessor for Engine {
         self.hammer_cutoff_low_hz = 0.0;
         self.hammer_cutoff_high_hz = 0.0;
         self.pool.set_piano_params(0.0, 0.0, 0.0, 0.0);
+        // Phase 4c D76: bus 内部状態も完全リセット (`synth_reset` C ABI 経由でも呼ばれる)。
+        self.resonance_bus.reset();
         self.bus_out_prev = 0.0;
     }
 }

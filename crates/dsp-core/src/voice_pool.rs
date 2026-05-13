@@ -214,6 +214,25 @@ impl<const N: usize> VoicePool<N> {
         sum * self.poly_scale
     }
 
+    /// Phase 4c D76 / D77: Sympathetic bus からの注入経路。
+    /// `inject = bus_out_prev × feedback_gain` を各 voice の `inject_feedback` に渡してから
+    /// 通常の `process_sample` を実行、合算して `poly_scale = 1/√N` を掛けて返す
+    /// (Phase 2 D20 / `process_sample` と同型のスケール)。
+    ///
+    /// `feedback_gain = 0` (Default kind / Piano + Sustain OFF) のとき `inject = 0` で
+    /// 各 voice 側の `bus_feedback_pending` が 0、`process_sample` 内の damping write-back に
+    /// 0 が加算されるため Phase 4a / 4b の voice 出力と byte 一致継承 (F65-a / D83)。
+    #[inline(always)]
+    pub fn process_sample_with_feedback(&mut self, bus_out_prev: f32, feedback_gain: f32) -> f32 {
+        let inject = bus_out_prev * feedback_gain;
+        let mut sum = 0.0_f32;
+        for v in self.voices.iter_mut() {
+            v.inject_feedback(inject);
+            sum += v.process_sample();
+        }
+        sum * self.poly_scale
+    }
+
     /// アクティブなボイス数 (テスト・診断用、C ABI 非公開、D22)。
     pub fn active_count(&self) -> usize {
         self.voices.iter().filter(|v| v.is_active()).count()
